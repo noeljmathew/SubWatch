@@ -103,39 +103,101 @@ LEFT JOIN member_stats ms ON ms.subscription_id = s.subscription_id
 LEFT JOIN usage_stats us  ON us.subscription_id = s.subscription_id;
 
 -- ---------------------------------------------------------------------------
--- v_entitlement_closure — transitive closure of the entitlement graph.
--- Every (root plan, plan it ultimately unlocks) pair, with depth and a
--- readable path. The path array also prevents infinite loops on cycles.
+-- path_label — a path of plan ids as text: the first plan with its plan
+-- name, the rest by service: 'Airtel Postpaid (Family 1199) → Amazon Prime
+-- → Prime Video'. Used for every reason path (FR-38).
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE VIEW v_entitlement_closure AS
+CREATE OR REPLACE FUNCTION path_label(p_path INT[]) RETURNS TEXT
+LANGUAGE sql STABLE
+SET jit = off
+AS $$
+    SELECT STRING_AGG(CASE WHEN x.ord = 1 THEN xs.name || ' (' || xp.name || ')' ELSE xs.name END,
+                      ' → ' ORDER BY x.ord)
+    FROM UNNEST(p_path) WITH ORDINALITY AS x(plan_id, ord)
+    JOIN plan_catalog xp ON xp.plan_id = x.plan_id
+    JOIN services xs     ON xs.service_id = xp.service_id
+$$;
+
+-- ---------------------------------------------------------------------------
+-- v_inclusion_closure — transitive closure of the entitlement graph over
+-- time. Every (root plan, plan it ultimately unlocks) pair, with depth, the
+-- path, and the dates the whole path is valid: the intersection (*) of every
+-- edge's range along it. A path whose edges were never valid at the same time
+-- is pruned (&&). The path array also prevents infinite loops on cycles.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE VIEW v_inclusion_closure AS
 WITH RECURSIVE walk AS (
-    SELECT e.plan_id AS root_plan_id,
-           e.included_plan_id,
+    SELECT h.parent_plan_id AS root_plan_id,
+           h.included_plan_id,
            1 AS depth,
-           ARRAY[e.plan_id, e.included_plan_id] AS path
-    FROM entitlements e
+           ARRAY[h.parent_plan_id, h.included_plan_id] AS path,
+           h.valid_during
+    FROM plan_inclusion_history h
     UNION ALL
     SELECT w.root_plan_id,
-           e.included_plan_id,
+           h.included_plan_id,
            w.depth + 1,
-           w.path || e.included_plan_id
+           w.path || h.included_plan_id,
+           w.valid_during * h.valid_during
     FROM walk w
-    JOIN entitlements e ON e.plan_id = w.included_plan_id
-    WHERE e.included_plan_id <> ALL (w.path)
+    JOIN plan_inclusion_history h ON h.parent_plan_id = w.included_plan_id
+    WHERE h.included_plan_id <> ALL (w.path)
+      AND h.valid_during && w.valid_during
 )
-SELECT
-    w.root_plan_id,
-    w.included_plan_id,
-    ip.service_id AS included_service_id,
-    w.depth,
-    w.path,
-    (SELECT STRING_AGG(CASE WHEN x.ord = 1 THEN xs.name || ' (' || xp.name || ')' ELSE xs.name END,
-                       ' → ' ORDER BY x.ord)
-       FROM UNNEST(w.path) WITH ORDINALITY AS x(plan_id, ord)
-       JOIN plans xp    ON xp.plan_id = x.plan_id
-       JOIN services xs ON xs.service_id = xp.service_id) AS path_label
+SELECT w.root_plan_id, w.included_plan_id, ip.service_id AS included_service_id,
+       w.depth, w.path, w.valid_during
 FROM walk w
-JOIN plans ip ON ip.plan_id = w.included_plan_id;
+JOIN plan_catalog ip ON ip.plan_id = w.included_plan_id;
+
+-- ---------------------------------------------------------------------------
+-- v_entitlement_closure — the closure as it is today (what v1 walked), with a
+-- readable path. entitlement_closure_at() is the same for any other date.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE VIEW v_entitlement_closure AS
+SELECT root_plan_id, included_plan_id, included_service_id, depth, path,
+       path_label(path) AS path_label
+FROM v_inclusion_closure
+WHERE valid_during @> CURRENT_DATE;
+
+CREATE OR REPLACE FUNCTION entitlement_closure_at(p_date DATE)
+RETURNS TABLE (root_plan_id INT, included_plan_id INT, included_service_id INT,
+               depth INT, path INT[], path_label TEXT)
+LANGUAGE sql STABLE
+SET jit = off
+AS $$
+    SELECT root_plan_id, included_plan_id, included_service_id, depth, path, path_label(path)
+    FROM v_inclusion_closure
+    WHERE valid_during @> p_date
+$$;
+
+-- ---------------------------------------------------------------------------
+-- v_plan_coverage — every service a purchasable plan gives access to today:
+-- its own service (depth 0) plus everything it reaches through included
+-- plans at any depth. The one traversal behind hidden duplicates, bundles,
+-- member coverage and (v2b) the optimizer's candidate expansion.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE VIEW v_plan_coverage AS
+SELECT p.plan_id, p.service_id, 0 AS depth, ARRAY[p.plan_id] AS path,
+       path_label(ARRAY[p.plan_id]) AS path_label
+FROM plan_catalog p
+WHERE p.is_purchasable
+UNION ALL
+SELECT root_plan_id, included_service_id, depth, path, path_label
+FROM v_entitlement_closure;
+
+-- ---------------------------------------------------------------------------
+-- v_member_coverage — who can use which service today, and through which
+-- active subscription: one row per (member, subscription, service reached).
+-- A member reaching a service through two subscriptions gets two rows.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE VIEW v_member_coverage AS
+SELECT hm.household_id, sm.user_id, pc.service_id,
+       s.subscription_id, s.plan_id, pc.depth, pc.path, pc.path_label
+FROM subscriptions s
+JOIN household_members hm    ON hm.user_id = s.payer_id
+JOIN subscription_members sm ON sm.subscription_id = s.subscription_id
+JOIN v_plan_coverage pc      ON pc.plan_id = s.plan_id
+WHERE s.status = 'active';
 
 -- ---------------------------------------------------------------------------
 -- v_hidden_duplicates — an active subscription is redundant if another active
@@ -149,14 +211,6 @@ JOIN plans ip ON ip.plan_id = w.included_plan_id;
 -- When several subscriptions explain it, the shortest path wins.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE VIEW v_hidden_duplicates AS
-WITH coverage AS (
-    SELECT root_plan_id AS plan_id, included_service_id AS service_id, depth, path_label
-    FROM v_entitlement_closure
-    UNION ALL
-    SELECT p.plan_id, p.service_id, 0, s.name || ' (' || p.name || ')'
-    FROM plans p JOIN services s ON s.service_id = p.service_id
-    WHERE p.is_purchasable
-)
 SELECT DISTINCT ON (dup.subscription_id)
     dup.household_id,
     dup.subscription_id,
@@ -171,13 +225,14 @@ SELECT DISTINCT ON (dup.subscription_id)
     cl.depth,
     cl.path_label,
     dup.payer_id,
-    src.payer_id        AS via_payer_id
+    src.payer_id        AS via_payer_id,
+    cl.path
 FROM v_subscription_detail dup
 JOIN v_subscription_detail src
     ON  src.household_id = dup.household_id
     AND src.subscription_id <> dup.subscription_id
     AND src.status = 'active'
-JOIN coverage cl
+JOIN v_plan_coverage cl
     ON  cl.plan_id = src.plan_id
     AND cl.service_id = dup.service_id
 WHERE dup.status = 'active'
@@ -273,9 +328,9 @@ ORDER BY single.subscription_id, host.max_members - host.member_count DESC;
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE VIEW v_bundle_opportunities AS
 WITH bundle_services AS (
-    SELECT DISTINCT p.plan_id, cl.included_service_id AS service_id
+    SELECT DISTINCT p.plan_id, cl.service_id
     FROM plans p
-    JOIN v_entitlement_closure cl ON cl.root_plan_id = p.plan_id
+    JOIN v_plan_coverage cl ON cl.plan_id = p.plan_id AND cl.depth > 0
     JOIN services s   ON s.service_id = p.service_id
     JOIN categories c ON c.category_id = s.category_id
     WHERE p.is_purchasable AND NOT c.is_passive
