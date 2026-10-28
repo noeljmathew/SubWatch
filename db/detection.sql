@@ -1077,6 +1077,243 @@ END;
 $$;
 
 -- ============================================================================
+-- Household optimizer (FR-29 to FR-33): data in, steps out
+-- ============================================================================
+
+-- ---------------------------------------------------------------------------
+-- optimizer_input — everything the optimizer (server/optimizer.js) needs for
+-- one household, as one JSON document. Prices and inclusions are those valid
+-- on p_date; needs, subscriptions and findings are as they are now.
+--   users          the household's members
+--   services       id, name, whether the category is passive
+--   needs          every need in force, with covered_today (v_need_coverage)
+--   subscriptions  active ones, with their members
+--   plans          plans already held, plus every priced plan that reaches a
+--                  needed service, each with the services it covers (shortest
+--                  path to each, depth 0 = its own service)
+--   alerts         open v1 findings, so the run can say which it adopts
+-- Every array is ordered, so the same data always gives the same document
+-- (and the same optimizer_state_hash).
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION optimizer_input(p_household_id INT, p_date DATE DEFAULT CURRENT_DATE)
+RETURNS JSONB
+LANGUAGE sql STABLE
+SET jit = off
+AS $$
+    WITH members AS (
+        SELECT hm.user_id, u.full_name
+        FROM household_members hm JOIN users u ON u.user_id = hm.user_id
+        WHERE hm.household_id = p_household_id
+    ),
+    subs AS (
+        SELECT s.subscription_id, s.payer_id, s.plan_id,
+               (SELECT array_agg(sm.user_id ORDER BY sm.user_id)
+                  FROM subscription_members sm WHERE sm.subscription_id = s.subscription_id) AS member_ids
+        FROM subscriptions s
+        JOIN members m ON m.user_id = s.payer_id
+        WHERE s.status = 'active'
+    ),
+    needs AS (
+        SELECT n.user_id, n.service_id, n.source, COALESCE(nc.covered, false) AS covered_today
+        FROM member_needs n
+        JOIN members m ON m.user_id = n.user_id
+        LEFT JOIN v_need_coverage nc ON nc.user_id = n.user_id AND nc.service_id = n.service_id
+        WHERE n.is_needed
+    ),
+    coverage AS (
+        SELECT DISTINCT ON (plan_id, service_id) plan_id, service_id, depth, path
+        FROM (SELECT p.plan_id, p.service_id, 0 AS depth, ARRAY[p.plan_id] AS path
+                FROM plan_catalog p WHERE p.is_purchasable
+              UNION ALL
+              SELECT root_plan_id, included_service_id, depth, path
+                FROM entitlement_closure_at(p_date)) c
+        ORDER BY plan_id, service_id, depth, path
+    ),
+    relevant_plans AS (
+        SELECT plan_id FROM subs
+        UNION
+        SELECT c.plan_id
+        FROM coverage c
+        JOIN plans_at(p_date) p ON p.plan_id = c.plan_id
+        WHERE p.price IS NOT NULL
+          AND c.service_id IN (SELECT service_id FROM needs)
+    )
+    SELECT jsonb_build_object(
+        'household_id', p_household_id,
+        'evaluated_on', p_date,
+        'users', (SELECT COALESCE(jsonb_agg(jsonb_build_object('user_id', user_id, 'name', full_name)
+                                            ORDER BY user_id), '[]')
+                    FROM members),
+        'services', (SELECT jsonb_agg(jsonb_build_object('service_id', sv.service_id, 'name', sv.name,
+                                                         'is_passive', c.is_passive)
+                                      ORDER BY sv.service_id)
+                       FROM services sv JOIN categories c ON c.category_id = sv.category_id),
+        'needs', (SELECT COALESCE(jsonb_agg(jsonb_build_object('user_id', user_id, 'service_id', service_id,
+                                                               'source', source, 'covered_today', covered_today)
+                                            ORDER BY user_id, service_id), '[]')
+                    FROM needs),
+        'subscriptions', (SELECT COALESCE(jsonb_agg(jsonb_build_object('subscription_id', subscription_id,
+                                                                       'payer_id', payer_id, 'plan_id', plan_id,
+                                                                       'member_ids', member_ids)
+                                                    ORDER BY subscription_id), '[]')
+                            FROM subs),
+        'plans', (SELECT COALESCE(jsonb_agg(jsonb_build_object(
+                                     'plan_id', p.plan_id, 'service_id', p.service_id, 'name', p.name,
+                                     'tier', p.tier, 'max_members', p.max_members,
+                                     'is_purchasable', p.is_purchasable, 'monthly_price', p.monthly_price,
+                                     'covers', (SELECT jsonb_agg(jsonb_build_object('service_id', c.service_id,
+                                                                                    'depth', c.depth, 'path', c.path)
+                                                                 ORDER BY c.service_id)
+                                                  FROM coverage c WHERE c.plan_id = p.plan_id))
+                                  ORDER BY p.plan_id), '[]')
+                    FROM plans_at(p_date) p
+                    WHERE p.plan_id IN (SELECT plan_id FROM relevant_plans)),
+        'alerts', (SELECT COALESCE(jsonb_agg(jsonb_build_object(
+                                      'alert_id', a.alert_id, 'alert_type', a.alert_type,
+                                      'recommended_plan_id', a.recommended_plan_id,
+                                      'savings', a.potential_monthly_savings,
+                                      'subject_ids', COALESCE((SELECT array_agg(x.subscription_id ORDER BY x.subscription_id)
+                                                                 FROM alert_subscriptions x
+                                                                WHERE x.alert_id = a.alert_id AND x.role = 'subject'), '{}'),
+                                      'source_ids', COALESCE((SELECT array_agg(x.subscription_id ORDER BY x.subscription_id)
+                                                                FROM alert_subscriptions x
+                                                               WHERE x.alert_id = a.alert_id AND x.role = 'source'), '{}'))
+                                   ORDER BY a.alert_id), '[]')
+                     FROM alerts a
+                     WHERE a.household_id = p_household_id AND a.status = 'open')
+    )
+$$;
+
+-- fingerprint of the data a run was computed from (see optimization_runs)
+CREATE OR REPLACE FUNCTION optimizer_state_hash(p_household_id INT, p_date DATE DEFAULT CURRENT_DATE)
+RETURNS TEXT
+LANGUAGE sql STABLE
+SET jit = off
+AS $$
+    SELECT md5(optimizer_input(p_household_id, p_date)::text)
+$$;
+
+-- ---------------------------------------------------------------------------
+-- apply_optimization — carry out an optimizer run's steps (FR-33), the same
+-- way apply_alert carries out one finding. The API calls it two ways:
+--   preview: BEGIN; SELECT apply_optimization(id); <read new totals>; ROLLBACK;
+--   apply:   BEGIN; SELECT apply_optimization(id); COMMIT;
+-- Locks: the household lock first (lock_household), then the run row FOR
+-- UPDATE, so a run is applied at most once.
+-- If the household changed since the run was computed (state_hash), nothing
+-- is applied: the run is marked stale and NULL is returned.
+-- Every insert goes through the normal triggers (capacity, household, payer).
+-- After the steps it checks, and raises (rolling everything back) if not:
+--   * every need that was covered before is still covered
+--   * every member of a cancelled passive subscription still reaches it
+--   * the household now costs exactly the run's cost_after
+-- Returns the steps it took, in plain English.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION apply_optimization(p_run_id INT) RETURNS TEXT[]
+LANGUAGE plpgsql
+SET jit = off
+AS $$
+DECLARE
+    r          optimization_runs%ROWTYPE;
+    st         RECORD;
+    v_hh       INT;
+    v_new      INT;
+    u          INT;
+    v_cost     NUMERIC;
+    v_open     TEXT[];
+    v_lost     TEXT;
+    steps      TEXT[] := '{}';
+BEGIN
+    SELECT household_id INTO v_hh FROM optimization_runs WHERE run_id = p_run_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Optimizer run % does not exist', p_run_id USING ERRCODE = 'check_violation';
+    END IF;
+    PERFORM lock_household(v_hh);                      -- household lock first, then the row
+    SELECT * INTO r FROM optimization_runs WHERE run_id = p_run_id FOR UPDATE;
+    IF r.status <> 'proposed' THEN
+        RAISE EXCEPTION 'This optimizer run was already %', r.status USING ERRCODE = 'check_violation';
+    END IF;
+    IF optimizer_state_hash(v_hh, r.evaluated_on) <> r.state_hash THEN
+        UPDATE optimization_runs SET status = 'stale' WHERE run_id = p_run_id;
+        RETURN NULL;
+    END IF;
+
+    -- needs nothing covers even now: the run doesn't have to cover these
+    SELECT COALESCE(array_agg(user_id || ':' || service_id), '{}') INTO v_open
+      FROM v_need_coverage WHERE household_id = v_hh AND NOT covered;
+
+    FOR st IN SELECT * FROM optimization_steps WHERE run_id = p_run_id ORDER BY step_no LOOP
+        IF st.action IN ('start', 'switch') THEN
+            INSERT INTO subscriptions (payer_id, plan_id, start_date)
+            VALUES (st.payer_id, st.plan_id, CURRENT_DATE)
+            RETURNING subscription_id INTO v_new;
+            FOREACH u IN ARRAY st.user_ids LOOP
+                IF u <> st.payer_id THEN
+                    INSERT INTO subscription_members (subscription_id, user_id) VALUES (v_new, u);
+                END IF;
+            END LOOP;
+        ELSIF st.action = 'add_member' THEN
+            INSERT INTO subscription_members (subscription_id, user_id) VALUES (st.subscription_id, st.user_ids[1]);
+        END IF;
+
+        IF st.action IN ('switch', 'cancel') THEN
+            UPDATE subscriptions
+               SET status = 'cancelled', end_date = GREATEST(CURRENT_DATE, start_date)
+             WHERE subscription_id = st.subscription_id AND status = 'active';
+            IF NOT FOUND THEN
+                RAISE EXCEPTION 'Step %: subscription % is no longer active', st.step_no, st.subscription_id
+                    USING ERRCODE = 'check_violation';
+            END IF;
+        END IF;
+        steps := steps || st.description;
+    END LOOP;
+
+    -- checked against member_needs as it was before the change, so a passive
+    -- need can't quietly disappear along with its subscription
+    SELECT string_agg(u2.full_name || ' / ' || sv.name, ', ') INTO v_lost
+      FROM v_need_coverage nc
+      JOIN users u2    ON u2.user_id = nc.user_id
+      JOIN services sv ON sv.service_id = nc.service_id
+     WHERE nc.household_id = v_hh AND NOT nc.covered
+       AND NOT (nc.user_id || ':' || nc.service_id) = ANY (v_open);
+    IF v_lost IS NOT NULL THEN
+        RAISE EXCEPTION 'Applying run % would leave needs uncovered: %', p_run_id, v_lost
+            USING ERRCODE = 'check_violation';
+    END IF;
+
+    SELECT string_agg(u2.full_name || ' / ' || sv.name, ', ') INTO v_lost
+      FROM optimization_steps os
+      JOIN subscriptions s         ON s.subscription_id = os.subscription_id
+      JOIN plan_catalog p          ON p.plan_id = s.plan_id
+      JOIN services sv             ON sv.service_id = p.service_id
+      JOIN categories c            ON c.category_id = sv.category_id
+      JOIN subscription_members sm ON sm.subscription_id = s.subscription_id
+      JOIN users u2                ON u2.user_id = sm.user_id
+     WHERE os.run_id = p_run_id AND os.action IN ('switch', 'cancel') AND c.is_passive
+       AND NOT EXISTS (SELECT 1 FROM v_member_coverage mc
+                       WHERE mc.user_id = sm.user_id AND mc.service_id = p.service_id);
+    IF v_lost IS NOT NULL THEN
+        RAISE EXCEPTION 'Applying run % would cancel a passive service outright: %', p_run_id, v_lost
+            USING ERRCODE = 'check_violation';
+    END IF;
+
+    SELECT COALESCE(SUM(p.monthly_price), 0) INTO v_cost
+      FROM subscriptions s
+      JOIN household_members hm           ON hm.user_id = s.payer_id
+      JOIN plans_at(r.evaluated_on) p     ON p.plan_id = s.plan_id
+     WHERE hm.household_id = v_hh AND s.status = 'active';
+    IF v_cost <> r.cost_after THEN
+        RAISE EXCEPTION 'Applying run % costs % a month, not the % it promised', p_run_id, v_cost, r.cost_after
+            USING ERRCODE = 'check_violation';
+    END IF;
+
+    UPDATE optimization_runs SET status = 'applied', applied_at = now() WHERE run_id = p_run_id;
+    CALL refresh_alerts(v_hh);
+    RETURN steps;
+END;
+$$;
+
+-- ============================================================================
 -- Bank statement import — find recurring charges in raw transactions
 -- ============================================================================
 
