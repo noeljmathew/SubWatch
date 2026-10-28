@@ -715,6 +715,126 @@ END;
 $$;
 
 -- ---------------------------------------------------------------------------
+-- v_auto_needs — the needs the data implies (see member_needs in schema.sql).
+-- A pair with both kinds of evidence is reported once, as usage.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE VIEW v_auto_needs AS
+SELECT DISTINCT ON (user_id, service_id)
+       household_id, user_id, service_id, source, last_evidence_at
+FROM (
+    SELECT hm.household_id, ul.user_id, p.service_id, 'usage'::varchar AS source,
+           MAX(ul.used_at) AS last_evidence_at
+    FROM usage_logs ul
+    JOIN subscriptions s      ON s.subscription_id = ul.subscription_id
+    JOIN plan_catalog p       ON p.plan_id = s.plan_id
+    JOIN household_members hm ON hm.user_id = ul.user_id
+    WHERE ul.used_at >= now() - interval '30 days'
+    GROUP BY hm.household_id, ul.user_id, p.service_id
+    UNION ALL
+    SELECT DISTINCT mc.household_id, mc.user_id, mc.service_id, 'passive', NULL::timestamptz
+    FROM v_member_coverage mc
+    JOIN services sv   ON sv.service_id = mc.service_id
+    JOIN categories c  ON c.category_id = sv.category_id
+    WHERE c.is_passive
+) evidence
+ORDER BY user_id, service_id, source = 'usage' DESC;
+
+-- ---------------------------------------------------------------------------
+-- v_need_coverage — every need that is in force, whether anything covers it
+-- today, and the shortest way it is covered (own plan first, then the fewest
+-- hops through included plans).
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE VIEW v_need_coverage AS
+SELECT DISTINCT ON (n.user_id, n.service_id)
+       hm.household_id, n.user_id, n.service_id, n.source, n.last_evidence_at,
+       mc.subscription_id IS NOT NULL AS covered,
+       mc.subscription_id             AS via_subscription_id,
+       mc.depth, mc.path, mc.path_label
+FROM member_needs n
+JOIN household_members hm     ON hm.user_id = n.user_id
+LEFT JOIN v_member_coverage mc ON mc.user_id = n.user_id AND mc.service_id = n.service_id
+WHERE n.is_needed
+ORDER BY n.user_id, n.service_id, mc.depth, mc.subscription_id;
+
+-- ---------------------------------------------------------------------------
+-- refresh_member_needs — sync the automatic rows of member_needs with
+-- v_auto_needs for one household (or all). Manual rows are never touched:
+-- a manual need stays, and a manual "not needed" keeps the automatic one out.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE PROCEDURE refresh_member_needs(p_household_id INT DEFAULT NULL)
+LANGUAGE plpgsql
+SET jit = off
+AS $$
+BEGIN
+    PERFORM lock_household(p_household_id);
+
+    CREATE TEMP TABLE IF NOT EXISTS _auto_needs ON COMMIT DROP AS
+        SELECT * FROM v_auto_needs WITH NO DATA;
+    TRUNCATE _auto_needs;
+    INSERT INTO _auto_needs
+        SELECT * FROM v_auto_needs
+        WHERE p_household_id IS NULL OR household_id = p_household_id;
+
+    -- automatic needs the data no longer supports go away
+    DELETE FROM member_needs n
+    USING household_members hm
+    WHERE hm.user_id = n.user_id
+      AND (p_household_id IS NULL OR hm.household_id = p_household_id)
+      AND n.source <> 'manual'
+      AND NOT EXISTS (SELECT 1 FROM _auto_needs a
+                      WHERE a.user_id = n.user_id AND a.service_id = n.service_id);
+
+    -- new ones are added, existing automatic ones refreshed, manual ones kept
+    INSERT INTO member_needs (user_id, service_id, source, last_evidence_at)
+    SELECT user_id, service_id, source, last_evidence_at FROM _auto_needs
+    ON CONFLICT (user_id, service_id) DO UPDATE
+        SET source           = EXCLUDED.source,
+            last_evidence_at = EXCLUDED.last_evidence_at,
+            updated_at       = now()
+        WHERE member_needs.source <> 'manual'
+          AND (member_needs.source, member_needs.last_evidence_at)
+              IS DISTINCT FROM (EXCLUDED.source, EXCLUDED.last_evidence_at);
+
+    DROP TABLE _auto_needs;
+END;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- set_member_need — the owner's override for one (person, service):
+--   true   they need it, whatever the data says
+--   false  they don't, and the automatic need stays out
+--   NULL   remove the override and go back to what the data says
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION set_member_need(p_user_id INT, p_service_id INT, p_is_needed BOOLEAN)
+RETURNS VOID
+LANGUAGE plpgsql
+SET jit = off
+AS $$
+DECLARE
+    v_hh INT;
+BEGIN
+    SELECT household_id INTO v_hh FROM household_members WHERE user_id = p_user_id;
+    IF v_hh IS NULL THEN
+        RAISE EXCEPTION 'User % is not part of any household', p_user_id USING ERRCODE = 'check_violation';
+    END IF;
+    PERFORM lock_household(v_hh);
+
+    IF p_is_needed IS NULL THEN
+        DELETE FROM member_needs
+        WHERE user_id = p_user_id AND service_id = p_service_id AND source = 'manual';
+    ELSE
+        INSERT INTO member_needs (user_id, service_id, source, is_needed, last_evidence_at)
+        VALUES (p_user_id, p_service_id, 'manual', p_is_needed, NULL)
+        ON CONFLICT (user_id, service_id) DO UPDATE
+            SET source = 'manual', is_needed = EXCLUDED.is_needed,
+                last_evidence_at = NULL, updated_at = now();
+    END IF;
+
+    CALL refresh_member_needs(v_hh);
+END;
+$$;
+
+-- ---------------------------------------------------------------------------
 -- refresh_alerts — sync the alerts table with the current findings for one
 -- household (or all). Idempotent:
 --   * open alerts whose finding no longer exists are deleted
@@ -729,6 +849,9 @@ SET jit = off
 AS $$
 BEGIN
     PERFORM lock_household(p_household_id);
+
+    -- needs first: they follow the same data the findings do
+    CALL refresh_member_needs(p_household_id);
 
     -- snapshot the findings once so all statements below see the same thing
     CREATE TEMP TABLE IF NOT EXISTS _findings ON COMMIT DROP AS

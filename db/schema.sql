@@ -213,6 +213,32 @@ CREATE TABLE usage_logs (
 CREATE INDEX idx_usage_logs_sub_time ON usage_logs(subscription_id, used_at);
 
 -- ---------------------------------------------------------------------------
+-- member_needs — the services each person needs (FR-28). A need belongs to
+-- the person (household_members), not to a subscription: the optimizer may
+-- move them onto a different plan, and the need has to survive that.
+--   usage    they used the service in the last 30 days (on any subscription,
+--            even one since cancelled)
+--   passive  they can reach a passive-category service (phone plan, cloud
+--            storage) through an active subscription. Nobody logs usage for
+--            those, so without this they would look unneeded.
+--   manual   set by the owner. is_needed = false is an override that removes
+--            an automatic need and keeps it removed, the same way a
+--            dismissed alert stays dismissed.
+-- Automatic rows are kept in sync by refresh_member_needs() (detection.sql).
+-- ---------------------------------------------------------------------------
+CREATE TABLE member_needs (
+    user_id           INT NOT NULL REFERENCES household_members(user_id) ON DELETE CASCADE,
+    service_id        INT NOT NULL REFERENCES services(service_id) ON DELETE CASCADE,
+    source            VARCHAR(10) NOT NULL CHECK (source IN ('usage','passive','manual')),
+    is_needed         BOOLEAN NOT NULL DEFAULT true,
+    last_evidence_at  TIMESTAMPTZ,
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, service_id),
+    CHECK (source = 'manual' OR is_needed)
+);
+CREATE INDEX idx_member_needs_service ON member_needs(service_id);
+
+-- ---------------------------------------------------------------------------
 -- alerts — persisted optimizer output. fingerprint identifies "the same
 -- finding" across refreshes, so a dismissed alert stays dismissed.
 -- An alert can involve any number of subscriptions (a family-plan suggestion
