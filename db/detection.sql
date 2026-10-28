@@ -540,6 +540,27 @@ LANGUAGE sql STABLE AS $$
 $$;
 
 -- ---------------------------------------------------------------------------
+-- household_spend_at — what a household's subscriptions cost per month on
+-- p_date, at the prices valid that day (FR-37). A subscription counts if it
+-- had started and not yet ended then (cancelling sets end_date). Paused ones
+-- don't count, as in v1.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION household_spend_at(p_household_id INT, p_date DATE)
+RETURNS NUMERIC
+LANGUAGE sql STABLE
+SET jit = off
+AS $$
+    SELECT COALESCE(SUM(p.monthly_price), 0)
+    FROM subscriptions s
+    JOIN household_members hm ON hm.user_id = s.payer_id
+    JOIN plans_at(p_date) p   ON p.plan_id = s.plan_id
+    WHERE hm.household_id = p_household_id
+      AND s.start_date <= p_date
+      AND (s.end_date IS NULL OR s.end_date > p_date)
+      AND s.status <> 'paused'
+$$;
+
+-- ---------------------------------------------------------------------------
 -- v_findings — every detector's output in one shape, with a stable
 -- fingerprint and a plain-English message
 -- ---------------------------------------------------------------------------

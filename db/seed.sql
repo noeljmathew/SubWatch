@@ -27,9 +27,12 @@ INSERT INTO categories (name, is_passive) VALUES
     ('Cloud Storage',         true),
     ('Telecom',               true);
 
+-- Ids: the ORDER BY clauses on services and plans pin the ids v1 happened to
+-- get from its join order (grouped by parent, last-listed first). Alert
+-- fingerprints contain these ids, and db/tests/v1_baseline depends on them.
 INSERT INTO services (name, category_id, website)
 SELECT v.name, c.category_id, v.website
-FROM (VALUES
+FROM (SELECT v.*, ROW_NUMBER() OVER () AS ord FROM (VALUES
     ('Netflix',          'Video Streaming',       'https://netflix.com'),
     ('JioHotstar',       'Video Streaming',       'https://jiohotstar.com'),
     ('Prime Video',      'Video Streaming',       'https://primevideo.com'),
@@ -47,12 +50,13 @@ FROM (VALUES
     ('Google One',       'Cloud Storage',         'https://one.google.com'),
     ('Airtel Postpaid',  'Telecom',               'https://airtel.in'),
     ('Jio Postpaid',     'Telecom',               'https://jio.com')
-) AS v(name, category, website)
-JOIN categories c ON c.name = v.category;
+) AS v(name, category, website)) v
+JOIN categories c ON c.name = v.category
+ORDER BY c.category_id, v.ord DESC;
 
-INSERT INTO plans (service_id, name, tier, price, billing_cycle, max_members, is_purchasable)
-SELECT s.service_id, v.plan, v.tier, v.price, v.cycle, v.max_members, v.purchasable
-FROM (VALUES
+-- plans: identity goes to plan_catalog, today's price to plan_price_history
+CREATE TEMP TABLE _plan_seed AS
+SELECT v.*, ROW_NUMBER() OVER () AS ord FROM (VALUES
     ('Netflix',          'Mobile',                    'individual', 149,  'monthly',   1, true),
     ('Netflix',          'Basic',                     'individual', 199,  'monthly',   1, true),
     ('Netflix',          'Standard',                  'duo',        499,  'monthly',   2, true),
@@ -95,17 +99,41 @@ FROM (VALUES
     ('Airtel Postpaid',  'Individual 449',            'individual', 449,  'monthly',   1, true),
     ('Airtel Postpaid',  'Family 1199',               'family',     1199, 'monthly',   4, true),
     ('Jio Postpaid',     'Plus 699',                  'family',     699,  'monthly',   4, true)
-) AS v(service, plan, tier, price, cycle, max_members, purchasable)
-JOIN services s ON s.name = v.service;
+) AS v(service, plan, tier, price, cycle, max_members, purchasable);
+
+INSERT INTO plan_catalog (service_id, name, tier, billing_cycle, max_members, is_purchasable)
+SELECT s.service_id, v.plan, v.tier, v.cycle, v.max_members, v.purchasable
+FROM _plan_seed v
+JOIN services s ON s.name = v.service
+ORDER BY s.service_id, v.ord DESC;
+
+-- every price has been valid for two years (longer than any demo subscription)
+INSERT INTO plan_price_history (plan_id, price, valid_from)
+SELECT pc.plan_id, v.price, CURRENT_DATE - 730
+FROM _plan_seed v
+JOIN services s      ON s.name = v.service
+JOIN plan_catalog pc ON pc.service_id = s.service_id AND pc.name = v.plan;
+
+DROP TABLE _plan_seed;
 
 -- helper used only while seeding: look up a plan by service + plan name
 CREATE FUNCTION pg_temp.plan_id(p_service TEXT, p_plan TEXT) RETURNS INT AS $$
-    SELECT p.plan_id FROM plans p JOIN services s ON s.service_id = p.service_id
+    SELECT p.plan_id FROM plan_catalog p JOIN services s ON s.service_id = p.service_id
     WHERE s.name = p_service AND p.name = p_plan
 $$ LANGUAGE sql;
 
--- entitlement graph (edges: plan -> included plan)
-INSERT INTO entitlements (plan_id, included_plan_id) VALUES
+-- price history: Netflix Premium went up from ₹599 to ₹649 90 days ago, so
+-- the Sharma household costs ₹50 a month more today than it did 100 days ago
+UPDATE plan_price_history SET valid_from = CURRENT_DATE - 90
+ WHERE plan_id = pg_temp.plan_id('Netflix', 'Premium');
+INSERT INTO plan_price_history (plan_id, price, valid_from, valid_to)
+VALUES (pg_temp.plan_id('Netflix', 'Premium'), 599, CURRENT_DATE - 730, CURRENT_DATE - 90);
+
+-- entitlement graph (edges: plan -> included plan), all valid for the last
+-- two years and still valid today
+INSERT INTO plan_inclusion_history (parent_plan_id, included_plan_id, valid_from)
+SELECT e.plan_id, e.included_plan_id, CURRENT_DATE - 730
+FROM (VALUES
     -- Amazon Prime includes Prime Video and Amazon Music
     (pg_temp.plan_id('Amazon Prime','Annual'),   pg_temp.plan_id('Prime Video','Included with Prime')),
     (pg_temp.plan_id('Amazon Prime','Annual'),   pg_temp.plan_id('Amazon Music','Included with Prime')),
@@ -128,7 +156,15 @@ INSERT INTO entitlements (plan_id, included_plan_id) VALUES
     (pg_temp.plan_id('Apple One','Individual'), pg_temp.plan_id('Apple TV+','Included with Apple One')),
     (pg_temp.plan_id('Apple One','Family'),     pg_temp.plan_id('Apple Music','Included with Apple One')),
     (pg_temp.plan_id('Apple One','Family'),     pg_temp.plan_id('iCloud+','50 GB (included)')),
-    (pg_temp.plan_id('Apple One','Family'),     pg_temp.plan_id('Apple TV+','Included with Apple One'));
+    (pg_temp.plan_id('Apple One','Family'),     pg_temp.plan_id('Apple TV+','Included with Apple One'))
+) AS e(plan_id, included_plan_id);
+
+-- an inclusion that has ended: Airtel's family plan used to include Netflix
+-- Basic until 180 days ago. Today it changes nothing; evaluated at an earlier
+-- date, Airtel reaches Netflix.
+INSERT INTO plan_inclusion_history (parent_plan_id, included_plan_id, valid_from, valid_to)
+VALUES (pg_temp.plan_id('Airtel Postpaid','Family 1199'), pg_temp.plan_id('Netflix','Basic (included)'),
+        CURRENT_DATE - 730, CURRENT_DATE - 180);
 
 -- ---------------------------------------------------------------------------
 -- people
