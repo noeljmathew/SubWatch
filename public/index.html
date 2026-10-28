@@ -1,0 +1,937 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SubWatch — Household Subscription Optimizer</title>
+<link rel="icon" href="data:," />
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7;
+    --surface: #fcfcfb;
+    --surface-2: #ffffff;
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --muted: #898781;
+    --grid: #e1e0d9;
+    --border: rgba(11,11,11,0.10);
+    --accent: #2a78d6;
+    --accent-ink: #ffffff;
+    --good-text: #006300;
+    --bad-text: #b3261e;
+    /* categorical identity for finding types */
+    --c-dup: #4a3aa7;
+    --c-consolidation: #2a78d6;
+    --c-spare: #1baf7a;
+    --c-bundle: #008300;
+    --c-churn: #eda100;
+    --c-waste: #e34948;
+    --c-overlap: #e87ba4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --page: #0d0d0d;
+      --surface: #1a1a19;
+      --surface-2: #222221;
+      --ink: #ffffff;
+      --ink-2: #c3c2b7;
+      --muted: #898781;
+      --grid: #2c2c2a;
+      --border: rgba(255,255,255,0.10);
+      --accent: #3987e5;
+      --good-text: #0ca30c;
+      --bad-text: #e66767;
+      --c-dup: #9085e9;
+      --c-consolidation: #3987e5;
+      --c-spare: #199e70;
+      --c-bundle: #008300;
+      --c-churn: #c98500;
+      --c-waste: #e66767;
+      --c-overlap: #d55181;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 14px;
+  }
+  button, select, input {
+    font: inherit;
+    font-size: 13px;
+    color: var(--ink);
+    background: var(--surface-2);
+    border: 1px solid var(--grid);
+    border-radius: 8px;
+    padding: 7px 11px;
+  }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--muted); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  button.small { padding: 4px 9px; font-size: 12px; }
+  button.link { border: none; background: none; padding: 0; color: var(--ink-2); text-decoration: underline; font-size: 12px; }
+  button:disabled { opacity: .5; cursor: default; }
+
+  header {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+    padding: 16px 28px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--grid);
+  }
+  header h1 { margin: 0; font-size: 18px; }
+  header .tag { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  header .controls { display: flex; gap: 8px; align-items: center; }
+
+  main {
+    max-width: 1240px; margin: 0 auto; padding: 22px 28px 60px;
+    display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 20px;
+  }
+  .stack { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+  .card { background: var(--surface); border: 1px solid var(--grid); border-radius: 12px; padding: 18px 20px; }
+  .card h2 { margin: 0 0 4px; font-size: 14px; }
+  .card .sub { margin: 0 0 14px; font-size: 12px; color: var(--muted); }
+
+  .tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+  .tile { background: var(--surface); border: 1px solid var(--grid); border-radius: 12px; padding: 15px 16px; }
+  .tile .label { font-size: 12px; color: var(--ink-2); }
+  .tile .value { font-size: 24px; font-weight: 700; margin: 4px 0 3px; }
+  .tile .hint { font-size: 11px; color: var(--muted); }
+  .meter { height: 6px; border-radius: 3px; background: var(--grid); overflow: hidden; margin-top: 7px; }
+  .meter > div { height: 100%; border-radius: 3px; background: var(--accent); }
+
+  /* findings */
+  .tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
+  .tabs button { padding: 5px 10px; font-size: 12px; border-radius: 999px; }
+  .tabs button.on { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+  .tabs .count { color: var(--muted); margin-left: 3px; }
+  .tabs button.on .count { color: inherit; opacity: .7; }
+  .finding { display: grid; grid-template-columns: 4px minmax(0, 1fr) auto; gap: 12px; padding: 12px 0; border-top: 1px solid var(--grid); }
+  .finding:first-child { border-top: none; padding-top: 0; }
+  .finding .rail { border-radius: 2px; }
+  .finding .kind { font-size: 11px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; color: var(--ink-2); margin-bottom: 3px; }
+  .finding .msg { line-height: 1.45; }
+  .finding .side { text-align: right; white-space: nowrap; }
+  .finding .save { font-weight: 700; color: var(--good-text); }
+  .finding .save.soft { color: var(--ink-2); font-weight: 600; }
+  .finding .per { font-size: 11px; color: var(--muted); }
+  .finding .acts { margin-top: 8px; display: flex; gap: 10px; justify-content: flex-end; }
+  .empty { color: var(--muted); font-size: 13px; padding: 6px 0; }
+  .finding .acts button.small { text-decoration: none; }
+  .preview { grid-column: 2 / -1; border: 1px solid var(--grid); border-radius: 10px; padding: 12px 14px; background: var(--surface-2); }
+  .preview .pv-title { font-size: 11px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; color: var(--ink-2); margin-bottom: 6px; }
+  .preview ol { margin: 0 0 10px; padding-left: 20px; line-height: 1.6; }
+  .preview .pv-nums { display: flex; gap: 18px; flex-wrap: wrap; font-size: 13px; margin-bottom: 8px; }
+  .preview .pv-nums b { font-variant-numeric: tabular-nums; }
+  .preview .pv-new { font-size: 12px; color: var(--ink-2); margin-bottom: 8px; }
+  .preview .pv-acts { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .preview .hint { margin-left: auto; }
+  .import-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
+  .import-row input[type=file] { max-width: 230px; }
+  .import-row a { font-size: 12px; color: var(--ink-2); }
+  .imp-summary { font-size: 13px; color: var(--ink-2); margin-bottom: 10px; }
+  .imp-counts { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+  .imp-item { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 300px); gap: 14px; padding: 11px 0; border-top: 1px solid var(--grid); align-items: center; }
+  .imp-item:first-child { border-top: none; }
+  .imp-item .desc { font-weight: 600; font-size: 13px; word-break: break-word; }
+  .imp-item .meta { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .imp-item .status { font-size: 12px; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+  .imp-item .status .line { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .imp-item .status .bad { color: var(--bad-text); font-weight: 600; }
+  .imp-item .status .ok { color: var(--good-text); font-weight: 600; }
+  .imp-item .status .meh { color: var(--muted); }
+  .imp-item .status .new { color: var(--ink); font-weight: 600; }
+  @media (max-width: 640px) {
+    .imp-item { grid-template-columns: 1fr; }
+    .preview .hint { margin-left: 0; }
+    .finding { grid-template-columns: 4px minmax(0, 1fr); }
+    .finding .side { grid-column: 2; text-align: left; display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+    .finding .acts { justify-content: flex-start; margin-top: 0; margin-left: auto; }
+  }
+
+  /* subscriptions */
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-size: 11px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase; color: var(--muted); padding: 0 8px 8px; }
+  td { padding: 10px 8px; border-top: 1px solid var(--grid); vertical-align: middle; font-size: 13px; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  tr.row { cursor: pointer; }
+  tr.row:hover td { background: color-mix(in srgb, var(--grid) 35%, transparent); }
+  tr.inactive td { color: var(--muted); }
+  .svc { font-weight: 600; }
+  .plan { font-size: 12px; color: var(--muted); }
+  .chips { display: flex; align-items: center; gap: 0; }
+  .chip {
+    width: 26px; height: 26px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+    font-size: 10px; font-weight: 700; background: var(--surface-2); color: var(--ink-2);
+    border: 2px solid var(--surface); margin-left: -3px; box-shadow: 0 0 0 1px var(--grid);
+  }
+  .chip:first-child { margin-left: 0; }
+  .chip.payer { background: var(--ink); color: var(--surface); }
+  .cap { font-size: 11px; color: var(--muted); margin-left: 6px; }
+  .flags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 3px; }
+  .flag { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--grid); color: var(--ink-2); display: inline-flex; align-items: center; gap: 4px; }
+  .flag i { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
+  svg.spark rect { fill: var(--accent); }
+  .detail td { background: color-mix(in srgb, var(--grid) 25%, transparent); cursor: default; }
+  .detail-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+  .detail h4 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); }
+  .detail .line { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
+  .member-pill { display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px 2px 9px; border-radius: 999px; border: 1px solid var(--grid); background: var(--surface-2); font-size: 12px; }
+  .member-pill button { border: none; background: none; padding: 0 4px; color: var(--muted); }
+  .detail input[type=number] { width: 72px; }
+
+  /* entitlements */
+  .path { padding: 9px 0; border-top: 1px solid var(--grid); font-size: 13px; }
+  .path:first-child { border-top: none; padding-top: 0; }
+  .path .who { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .path .arrow { color: var(--muted); margin: 0 4px; }
+  .path .hit { color: var(--bad-text); font-weight: 600; }
+
+  /* right column */
+  .member { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; padding: 9px 0; border-top: 1px solid var(--grid); }
+  .member:first-child { border-top: none; padding-top: 0; }
+  .member .name { font-weight: 600; }
+  .member .role { font-size: 11px; color: var(--muted); font-weight: 400; margin-left: 4px; }
+  .member .figures { font-size: 12px; color: var(--ink-2); }
+  .member .net { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .member .net small { display: block; font-weight: 400; font-size: 11px; color: var(--muted); }
+  .settle { display: flex; justify-content: space-between; padding: 7px 0; border-top: 1px solid var(--grid); font-size: 13px; }
+  .settle:first-child { border-top: none; padding-top: 0; }
+  .settle .amt { font-weight: 700; font-variant-numeric: tabular-nums; }
+  .renewal { display: grid; grid-template-columns: 54px minmax(0, 1fr) auto; gap: 10px; padding: 7px 0; border-top: 1px solid var(--grid); font-size: 13px; align-items: baseline; }
+  .renewal:first-child { border-top: none; padding-top: 0; }
+  .renewal .d { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .renewal .amt { font-variant-numeric: tabular-nums; }
+  .total { display: flex; justify-content: space-between; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--ink); font-weight: 700; font-size: 13px; }
+  .bar-row { display: grid; grid-template-columns: 150px minmax(0, 1fr) 60px; gap: 10px; align-items: center; margin-bottom: 9px; font-size: 12px; }
+  .bar-row .lab { color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .bar-track { height: 10px; background: var(--grid); border-radius: 4px; overflow: hidden; }
+  .bar-fill { height: 100%; background: var(--accent); border-radius: 4px; }
+  .bar-row .val { text-align: right; font-variant-numeric: tabular-nums; }
+
+  form.add { display: flex; flex-direction: column; gap: 10px; }
+  form.add label { display: block; font-size: 11px; color: var(--ink-2); margin-bottom: 4px; }
+  form.add select, form.add input[type=date] { width: 100%; }
+  .checks { display: flex; flex-wrap: wrap; gap: 6px 12px; font-size: 13px; }
+  .checks label { display: inline-flex; gap: 5px; align-items: center; font-size: 13px; color: var(--ink); margin: 0; }
+  .hint { font-size: 11px; color: var(--muted); }
+
+  .toast {
+    position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%) translateY(20px);
+    background: var(--ink); color: var(--surface); padding: 10px 16px; border-radius: 10px;
+    font-size: 13px; opacity: 0; transition: all .2s; pointer-events: none; max-width: min(560px, calc(100vw - 32px));
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toast.err { background: var(--bad-text); color: #fff; }
+
+  @media (max-width: 1000px) {
+    main { grid-template-columns: minmax(0, 1fr); }
+    .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 640px) {
+    header, main { padding-left: 16px; padding-right: 16px; }
+    .detail-grid { grid-template-columns: 1fr; }
+    .hide-sm { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>SubWatch</h1>
+    <div class="tag">Household subscription optimizer</div>
+  </div>
+  <div class="controls">
+    <select id="householdSelect" aria-label="Household"></select>
+    <button id="runBtn">Run optimizer</button>
+  </div>
+</header>
+
+<main>
+  <div class="stack">
+    <div class="tiles" id="tiles"></div>
+
+    <section class="card">
+      <h2>Optimizer findings</h2>
+      <p class="sub">Things the database found by cross-checking plans, members, entitlements and usage.</p>
+      <div class="tabs" id="tabs"></div>
+      <div id="findings"></div>
+    </section>
+
+    <section class="card">
+      <h2>Subscriptions</h2>
+      <p class="sub">Click a row to manage members, log usage or cancel. Bars show sessions per 30 days over the last 6 months.</p>
+      <table>
+        <thead>
+          <tr>
+            <th>Service</th>
+            <th class="hide-sm">Paid by</th>
+            <th>Members</th>
+            <th class="hide-sm">Usage</th>
+            <th class="num" style="text-align:right">Per month</th>
+          </tr>
+        </thead>
+        <tbody id="subsBody"></tbody>
+      </table>
+    </section>
+
+    <section class="card">
+      <h2>Import a bank statement</h2>
+      <p class="sub">A CSV with date, description and amount columns. SubWatch looks for charges that repeat on a steady cycle and checks them against what this household already tracks.</p>
+      <div class="import-row">
+        <select id="impUser" aria-label="Whose statement"></select>
+        <input type="file" id="impFile" accept=".csv,text/csv" aria-label="Statement CSV" />
+        <span class="hint">or</span>
+        <button id="impSample">Try a sample statement</button>
+        <a id="impSampleLink" href="#" download>download sample</a>
+      </div>
+      <div id="impResults"></div>
+    </section>
+
+    <section class="card">
+      <h2>Hidden entitlements</h2>
+      <p class="sub">Services your household already gets through another plan, found by walking the "includes" graph.</p>
+      <div id="entitlements"></div>
+    </section>
+  </div>
+
+  <div class="stack">
+    <section class="card">
+      <h2>Who pays what</h2>
+      <p class="sub">Fair cost = sole subs in full, plus a share of shared plans (half split equally, half by minutes used).</p>
+      <div id="members"></div>
+    </section>
+
+    <section class="card">
+      <h2>Settle up</h2>
+      <p class="sub">Monthly transfers, with opposite debts netted out.</p>
+      <div id="settle"></div>
+    </section>
+
+    <section class="card">
+      <h2>Next 30 days</h2>
+      <p class="sub">Upcoming renewals.</p>
+      <div id="forecast"></div>
+    </section>
+
+    <section class="card">
+      <h2>Spend by category</h2>
+      <p class="sub">Per month, active subscriptions.</p>
+      <div id="categories"></div>
+    </section>
+
+    <section class="card">
+      <h2>Add a subscription</h2>
+      <form class="add" id="addForm">
+        <div>
+          <label for="fPlan">Plan</label>
+          <select id="fPlan" required></select>
+          <div class="hint" id="fPlanHint"></div>
+        </div>
+        <div>
+          <label for="fPayer">Paid by</label>
+          <select id="fPayer" required></select>
+        </div>
+        <div>
+          <label>Shared with</label>
+          <div class="checks" id="fMembers"></div>
+        </div>
+        <div>
+          <label for="fStart">Start date</label>
+          <input type="date" id="fStart" required />
+        </div>
+        <button class="primary" type="submit">Add subscription</button>
+      </form>
+    </section>
+  </div>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API = '/api';
+const TYPES = {
+  hidden_duplicate: { label: 'Hidden duplicate', color: 'var(--c-dup)',           tab: 'dup' },
+  consolidation:    { label: 'Family plan',      color: 'var(--c-consolidation)', tab: 'plans' },
+  spare_capacity:   { label: 'Free spot',        color: 'var(--c-spare)',         tab: 'plans' },
+  bundle:           { label: 'Bundle',           color: 'var(--c-bundle)',        tab: 'bundle' },
+  churn_risk:       { label: 'Usage falling',    color: 'var(--c-churn)',         tab: 'churn' },
+  waste:            { label: 'Unused',           color: 'var(--c-waste)',         tab: 'waste' },
+  overlap:          { label: 'Overlap',          color: 'var(--c-overlap)',       tab: 'overlap' },
+};
+const SOFT = new Set(['churn_risk', 'overlap']);
+const TABS = [
+  ['all', 'All'], ['dup', 'Hidden duplicates'], ['plans', 'Family plans'], ['bundle', 'Bundles'],
+  ['churn', 'Usage falling'], ['waste', 'Unused'], ['overlap', 'Overlap'],
+];
+
+const state = { hid: null, tab: 'all', open: null, members: [], subs: [], alerts: [], plans: [], preview: null, importId: null };
+
+const $ = (id) => document.getElementById(id);
+const inr = (n) => '₹' + Math.round(Number(n)).toLocaleString('en-IN');
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const initials = (name) => name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+const first = (name) => name.split(' ')[0];
+
+async function api(path, opts = {}) {
+  const res = await fetch(API + path, {
+    ...opts,
+    headers: opts.body ? { 'Content-Type': 'application/json' } : undefined,
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || res.statusText);
+  }
+  return res.status === 204 ? null : res.json();
+}
+
+let toastTimer;
+function toast(msg, isErr = false) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (isErr ? ' err' : '');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (t.className = 'toast'), isErr ? 4500 : 2500);
+}
+
+async function act(fn, okMsg) {
+  try {
+    await fn();
+    if (okMsg) toast(okMsg);
+    await loadAll();
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+// ---------- loading ----------
+async function init() {
+  const [households, plans] = await Promise.all([api('/households'), api('/plans')]);
+  state.plans = plans;
+  $('householdSelect').innerHTML = households
+    .map(h => `<option value="${h.household_id}">${esc(h.name)} (${h.member_count})</option>`).join('');
+  $('householdSelect').onchange = (e) => {
+    state.hid = Number(e.target.value);
+    Object.assign(state, { open: null, preview: null, importId: null });
+    $('impResults').innerHTML = '';
+    loadAll();
+  };
+  state.hid = households[0].household_id;
+  renderPlanOptions();
+  $('fStart').valueAsDate = new Date();
+  await loadAll();
+}
+
+async function loadAll() {
+  const h = state.hid;
+  const [summary, members, subs, alerts, ents, settle, forecast] = await Promise.all([
+    api(`/households/${h}/summary`), api(`/households/${h}/members`), api(`/households/${h}/subscriptions`),
+    api(`/households/${h}/alerts`), api(`/households/${h}/entitlements`), api(`/households/${h}/settle-up`),
+    api(`/households/${h}/forecast?days=30`),
+  ]);
+  Object.assign(state, { members, subs, alerts });
+  renderTiles(summary);
+  renderFindings();
+  renderSubs();
+  renderEntitlements(ents);
+  renderMembers();
+  renderSettle(settle);
+  renderForecast(forecast);
+  renderCategories(summary.spend_by_category);
+  renderFormMembers();
+  renderImportUsers();
+  if (state.importId) await loadImportResults();
+}
+
+// ---------- tiles ----------
+function renderTiles(s) {
+  const budget = Number(s.household.monthly_budget || 0);
+  const pct = budget ? Math.round(100 * s.monthly_spend / budget) : null;
+  $('tiles').innerHTML = `
+    <div class="tile">
+      <div class="label">Household spend</div>
+      <div class="value">${inr(s.monthly_spend)}</div>
+      <div class="hint">per month · ${pct !== null ? pct + '% of ' + inr(budget) + ' budget' : 'no budget set'}</div>
+    </div>
+    <div class="tile">
+      <div class="label">Savings found</div>
+      <div class="value" style="color:var(--good-text)">${inr(s.savings_found)}</div>
+      <div class="hint">per month · ${inr(s.savings_found * 12)} a year</div>
+    </div>
+    <div class="tile">
+      <div class="label">Efficiency score</div>
+      <div class="value">${s.efficiency_score}<span style="font-size:14px;color:var(--muted);font-weight:600"> / 100</span></div>
+      <div class="meter" title="Share of spend that isn't flagged as avoidable"><div style="width:${s.efficiency_score}%"></div></div>
+    </div>
+    <div class="tile">
+      <div class="label">Subscriptions</div>
+      <div class="value">${s.active_subscriptions}</div>
+      <div class="hint">active · ${state.members.length} people</div>
+    </div>`;
+}
+
+// ---------- findings ----------
+function renderFindings() {
+  const counts = { all: state.alerts.length };
+  for (const a of state.alerts) counts[TYPES[a.alert_type].tab] = (counts[TYPES[a.alert_type].tab] || 0) + 1;
+  $('tabs').innerHTML = TABS
+    .filter(([k]) => k === 'all' || counts[k])
+    .map(([k, label]) => `<button data-tab="${k}" class="${state.tab === k ? 'on' : ''}">${label}<span class="count">${counts[k] || 0}</span></button>`)
+    .join('');
+  if (state.tab !== 'all' && !counts[state.tab]) state.tab = 'all';
+  $('tabs').querySelectorAll('button').forEach(b => b.onclick = () => { state.tab = b.dataset.tab; renderFindings(); });
+
+  const list = state.alerts.filter(a => state.tab === 'all' || TYPES[a.alert_type].tab === state.tab);
+  $('findings').innerHTML = list.length ? list.map(a => {
+    const t = TYPES[a.alert_type];
+    const soft = SOFT.has(a.alert_type);
+    return `
+      <div class="finding">
+        <div class="rail" style="background:${t.color}"></div>
+        <div>
+          <div class="kind">${t.label}</div>
+          <div class="msg">${esc(a.message)}</div>
+        </div>
+        <div class="side">
+          ${a.potential_monthly_savings ? `<div class="save ${soft ? 'soft' : ''}">${soft ? 'up to ' : 'save '}${inr(a.potential_monthly_savings)}</div><div class="per">per month</div>` : ''}
+          <div class="acts">
+            <button class="small" data-preview="${a.alert_id}">Preview fix</button>
+            <button class="link" data-id="${a.alert_id}" data-status="resolved">Done</button>
+            <button class="link" data-id="${a.alert_id}" data-status="dismissed">Dismiss</button>
+          </div>
+        </div>
+        ${state.preview && state.preview.id === a.alert_id ? previewPanel(state.preview) : ''}
+      </div>`;
+  }).join('') : `<div class="empty">Nothing to fix here. Nice.</div>`;
+
+  $('findings').querySelectorAll('button[data-preview]').forEach(b => b.onclick = async () => {
+    const id = Number(b.dataset.preview);
+    if (state.preview && state.preview.id === id) { state.preview = null; return renderFindings(); }
+    b.disabled = true;
+    try {
+      state.preview = { id, data: await api(`/alerts/${id}/preview`, { method: 'POST' }) };
+      renderFindings();
+    } catch (e) {
+      b.disabled = false;
+      toast(e.message, true);
+    }
+  });
+  $('findings').querySelectorAll('button[data-apply]').forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    try {
+      const r = await api(`/alerts/${b.dataset.apply}/apply`, { method: 'POST' });
+      state.preview = null;
+      toast(r.monthly_saving > 0 ? `Done — saving ${inr(r.monthly_saving)} a month` : 'Done');
+      await loadAll();
+    } catch (e) {
+      b.disabled = false;
+      toast(e.message, true);
+    }
+  });
+  $('findings').querySelectorAll('button[data-close]').forEach(b => b.onclick = () => { state.preview = null; renderFindings(); });
+  $('findings').querySelectorAll('button[data-id]').forEach(b => b.onclick = () =>
+    act(() => api(`/alerts/${b.dataset.id}`, { method: 'PATCH', body: JSON.stringify({ status: b.dataset.status }) }),
+        b.dataset.status === 'resolved' ? 'Marked as done' : 'Dismissed — it won\'t come back'));
+}
+
+function previewPanel(p) {
+  const d = p.data;
+  const saving = d.spend_before - d.spend_after;
+  return `
+    <div class="preview">
+      <div class="pv-title">If you apply this</div>
+      <ol>${d.steps.map(st => `<li>${esc(st)}</li>`).join('')}</ol>
+      <div class="pv-nums">
+        <span>Monthly spend <b>${inr(d.spend_before)} → ${inr(d.spend_after)}</b></span>
+        ${saving > 0.5 ? `<span class="save" style="color:var(--good-text);font-weight:700">−${inr(saving)}/mo</span>` : ''}
+        <span>Open findings <b>${d.open_before} → ${d.open_after}</b></span>
+      </div>
+      ${d.new_findings.length ? `<div class="pv-new">It would also raise: ${d.new_findings.map(f => esc(f.message)).join(' · ')}</div>` : ''}
+      <div class="pv-acts">
+        <button class="primary small" data-apply="${p.id}">Apply</button>
+        <button class="small" data-close>Not now</button>
+        <span class="hint">This preview ran in a transaction that was rolled back, so nothing has changed yet.</span>
+      </div>
+    </div>`;
+}
+
+// ---------- subscriptions ----------
+function spark(trend) {
+  if (!trend || !trend.length) return '';
+  const max = Math.max(1, ...trend);
+  const w = 7, gap = 3, h = 22;
+  const bars = trend.map((v, i) => {
+    const bh = Math.max(1.5, (v / max) * h);
+    return `<rect x="${i * (w + gap)}" y="${h - bh}" width="${w}" height="${bh}" rx="1.5"></rect>`;
+  }).join('');
+  return `<svg class="spark" width="${trend.length * (w + gap) - gap}" height="${h}" role="img"
+           aria-label="Sessions per 30 days: ${trend.join(', ')}"><title>Sessions per 30 days, oldest to newest: ${trend.join(' → ')}</title>${bars}</svg>`;
+}
+
+function flagsFor(subId) {
+  const types = state.alerts.filter(a => a.subject_ids.includes(subId)).map(a => a.alert_type);
+  return [...new Set(types)].map(t =>
+    `<span class="flag"><i style="background:${TYPES[t].color}"></i>${TYPES[t].label}</span>`).join('');
+}
+
+function renderSubs() {
+  const rows = state.subs.map(s => {
+    const active = s.status === 'active';
+    const chips = s.members.map(m =>
+      `<span class="chip ${m.user_id === s.payer_id ? 'payer' : ''}" title="${esc(m.full_name)}${m.user_id === s.payer_id ? ' (pays)' : ''}">${initials(m.full_name)}</span>`).join('');
+    const lastUsed = s.last_used_at ? `${s.days_since_last_use}d ago` : 'never used';
+    const main = `
+      <tr class="row ${active ? '' : 'inactive'}" data-id="${s.subscription_id}">
+        <td>
+          <div class="svc">${esc(s.service_name)}</div>
+          <div class="plan">${esc(s.plan_name)} · ${s.billing_cycle}${active ? '' : ' · ' + s.status}</div>
+          ${active ? `<div class="flags">${flagsFor(s.subscription_id)}</div>` : ''}
+        </td>
+        <td class="hide-sm">${esc(first(s.payer_name))}</td>
+        <td><div class="chips">${chips}<span class="cap">${s.member_count}/${s.max_members}</span></div></td>
+        <td class="hide-sm">${s.is_passive ? '<span class="plan">always on</span>' : spark(s.trend) + `<div class="plan">${lastUsed}</div>`}</td>
+        <td class="num">${inr(s.monthly_price)}</td>
+      </tr>`;
+    return main + (state.open === s.subscription_id ? detailRow(s) : '');
+  }).join('');
+  $('subsBody').innerHTML = rows || `<tr><td colspan="5" class="empty">No subscriptions yet.</td></tr>`;
+
+  $('subsBody').querySelectorAll('tr.row').forEach(tr => tr.onclick = () => {
+    const id = Number(tr.dataset.id);
+    state.open = state.open === id ? null : id;
+    renderSubs();
+  });
+  wireDetail();
+}
+
+function detailRow(s) {
+  const active = s.status === 'active';
+  const memberIds = new Set(s.members.map(m => m.user_id));
+  const addable = state.members.filter(m => !memberIds.has(m.user_id));
+  const full = s.member_count >= s.max_members;
+  return `
+    <tr class="detail"><td colspan="5">
+      <div class="detail-grid">
+        <div>
+          <h4>Members (${s.member_count}/${s.max_members})</h4>
+          <div class="line">
+            ${s.members.map(m => `<span class="member-pill">${esc(first(m.full_name))}${m.user_id === s.payer_id
+              ? ' <span class="plan">(pays)</span>&nbsp;'
+              : `<button title="Remove" data-remove="${m.user_id}">×</button>`}</span>`).join('')}
+          </div>
+          ${active && addable.length ? `
+          <div class="line">
+            <select id="addMember">${addable.map(m => `<option value="${m.user_id}">${esc(m.full_name)}</option>`).join('')}</select>
+            <button class="small" id="addMemberBtn" ${full ? 'title="Plan is full — the database will refuse this"' : ''}>Add</button>
+          </div>` : ''}
+        </div>
+        <div>
+          <h4>Log usage</h4>
+          ${active ? `
+          <div class="line">
+            <select id="useMember">${s.members.map(m => `<option value="${m.user_id}">${esc(first(m.full_name))}</option>`).join('')}</select>
+            <input type="number" id="useMinutes" min="1" value="30" aria-label="Minutes" /> min
+          </div>
+          <button class="small" id="useBtn">Log a session now</button>` : '<div class="plan">Not active</div>'}
+        </div>
+        <div>
+          <h4>Status</h4>
+          <div class="line">
+            ${active ? `<button class="small" data-status="paused">Pause</button>
+                        <button class="small" data-status="cancelled">Cancel</button>`
+                     : `<button class="small" data-status="active">Reactivate</button>`}
+          </div>
+          <div class="plan">${inr(s.price)} per ${s.billing_cycle.replace('ly', '').replace('dai', 'day')} · started ${s.start_date.slice(0, 10)}</div>
+        </div>
+      </div>
+    </td></tr>`;
+}
+
+function wireDetail() {
+  const id = state.open;
+  if (!id) return;
+  const q = (sel) => $('subsBody').querySelector(sel);
+  $('subsBody').querySelectorAll('[data-remove]').forEach(b => b.onclick = () =>
+    act(() => api(`/subscriptions/${id}/members/${b.dataset.remove}`, { method: 'DELETE' }), 'Member removed'));
+  if (q('#addMemberBtn')) q('#addMemberBtn').onclick = () =>
+    act(() => api(`/subscriptions/${id}/members`, { method: 'POST', body: JSON.stringify({ user_id: Number(q('#addMember').value) }) }), 'Member added');
+  if (q('#useBtn')) q('#useBtn').onclick = () =>
+    act(() => api(`/subscriptions/${id}/usage`, { method: 'POST', body: JSON.stringify({
+      user_id: Number(q('#useMember').value), duration_minutes: Number(q('#useMinutes').value) || 30 }) }), 'Session logged');
+  $('subsBody').querySelectorAll('.detail [data-status]').forEach(b => b.onclick = () =>
+    act(() => api(`/subscriptions/${id}`, { method: 'PATCH', body: JSON.stringify({ status: b.dataset.status }) }),
+        b.dataset.status === 'cancelled' ? 'Cancelled' : b.dataset.status === 'paused' ? 'Paused' : 'Reactivated'));
+}
+
+// ---------- entitlements ----------
+function renderEntitlements(rows) {
+  if (!rows.length) { $('entitlements').innerHTML = '<div class="empty">No plan in this household includes other services.</div>'; return; }
+  $('entitlements').innerHTML = rows.map(r => {
+    const parts = r.path_label.split(' → ');
+    const last = parts.pop();
+    return `
+      <div class="path">
+        <div>${parts.map(esc).join('<span class="arrow">→</span>')}<span class="arrow">→</span><strong class="${r.also_paid_separately ? 'hit' : ''}">${esc(last)}</strong>
+          ${r.also_paid_separately ? ' <span class="hit">· also being paid for separately</span>' : ''}</div>
+        <div class="who">via ${esc(first(r.payer_name))}'s plan · covers ${esc(r.member_names)}${r.depth > 1 ? ` · ${r.depth} levels deep` : ''}</div>
+      </div>`;
+  }).join('');
+}
+
+// ---------- bank statement import ----------
+const fmtDay = (iso) => new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+
+function renderImportUsers() {
+  const sel = $('impUser');
+  const prev = Number(sel.value);
+  sel.innerHTML = state.members.map(m => `<option value="${m.user_id}">${esc(m.full_name)}'s statement</option>`).join('');
+  if (state.members.some(m => m.user_id === prev)) sel.value = prev;
+  updateSampleLink();
+}
+
+function updateSampleLink() {
+  $('impSampleLink').href = `${API}/households/${state.hid}/sample-statement?user_id=${$('impUser').value}`;
+}
+$('impUser').onchange = updateSampleLink;
+
+// tolerant CSV reader: quoted fields, header names like date/narration/debit,
+// dates as YYYY-MM-DD or DD/MM/YYYY, amounts like "₹1,299.00" or "1299 Dr"
+function parseStatement(text) {
+  const lines = [];
+  let row = [], field = '', q = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) {
+      if (c === '"' && text[i + 1] === '"') { field += '"'; i++; }
+      else if (c === '"') q = false;
+      else field += c;
+    } else if (c === '"') q = true;
+    else if (c === ',') { row.push(field); field = ''; }
+    else if (c === '\n' || c === '\r') {
+      if (c === '\r' && text[i + 1] === '\n') i++;
+      row.push(field); field = '';
+      if (row.some(x => x.trim() !== '')) lines.push(row);
+      row = [];
+    } else field += c;
+  }
+  row.push(field);
+  if (row.some(x => x.trim() !== '')) lines.push(row);
+  if (!lines.length) throw new Error('The file is empty');
+
+  const head = lines[0].map(h => h.trim().toLowerCase());
+  const find = (...names) => head.findIndex(h => names.some(n => h.includes(n)));
+  const di = find('date');
+  const ti = find('description', 'narration', 'details', 'particulars', 'merchant');
+  let ai = find('debit', 'withdrawal');
+  if (ai < 0) ai = find('amount');
+  if (di < 0 || ti < 0 || ai < 0) throw new Error('Need date, description and amount (or debit) columns');
+
+  const toIso = (d) => {
+    d = d.trim();
+    let m = d.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+    m = d.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
+    if (m) return `${m[3].length === 2 ? '20' + m[3] : m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+    return null;
+  };
+  const rows = [];
+  for (const l of lines.slice(1)) {
+    const date = toIso(l[di] || '');
+    const amount = parseFloat(String(l[ai] || '').replace(/[₹,\s]|dr|cr/gi, ''));
+    if (date && !isNaN(amount) && amount !== 0) rows.push({ date, description: (l[ti] || '').trim(), amount });
+  }
+  if (!rows.length) throw new Error('No usable rows found — check the date and amount columns');
+  return rows;
+}
+
+async function importStatement(text, fileName) {
+  const rows = parseStatement(text);
+  const userId = Number($('impUser').value);
+  const r = await api(`/households/${state.hid}/imports`, {
+    method: 'POST', body: JSON.stringify({ user_id: userId, file_name: fileName, rows }),
+  });
+  state.importId = r.import_id;
+  await loadImportResults();
+}
+
+$('impFile').onchange = async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  try { await importStatement(await f.text(), f.name); }
+  catch (err) { toast(err.message, true); }
+  e.target.value = '';
+};
+$('impSample').onclick = async () => {
+  try {
+    const res = await fetch(`${API}/households/${state.hid}/sample-statement?user_id=${$('impUser').value}`);
+    if (!res.ok) throw new Error('Could not build a sample statement');
+    await importStatement(await res.text(), 'sample-statement.csv');
+  } catch (err) { toast(err.message, true); }
+};
+
+const IMP_LABEL = {
+  still_charged: 'still charged', untracked: 'not tracked', no_matching_plan: 'unknown plan',
+  not_in_catalog: 'not a known service', cancelled: 'cancelled', tracked: 'already tracked',
+};
+
+async function loadImportResults() {
+  const d = await api(`/imports/${state.importId}/results`);
+  const counts = {};
+  d.recurring.forEach(r => counts[r.status] = (counts[r.status] || 0) + 1);
+  $('impResults').innerHTML = `
+    <div class="imp-summary"><b>${esc(first(d.full_name))}'s statement</b> · ${d.transactions} transactions,
+      ${fmtDay(d.period_start)} – ${fmtDay(d.period_end)} · <b>${d.recurring.length}</b> recurring charges found</div>
+    <div class="imp-counts">${Object.keys(IMP_LABEL).filter(k => counts[k])
+      .map(k => `<span class="flag">${counts[k]} ${IMP_LABEL[k]}</span>`).join('')}</div>
+    ${d.recurring.length ? d.recurring.map(importItem).join('') : '<div class="empty">No charges repeat on a steady cycle in this statement.</div>'}`;
+
+  $('impResults').querySelectorAll('[data-add]').forEach(b => b.onclick = () => {
+    const r = d.recurring[Number(b.dataset.add)];
+    const sel = $('impResults').querySelector(`[data-plan-for="${b.dataset.add}"]`);
+    const planId = sel ? Number(sel.value) : r.candidate_plan_ids[0];
+    act(() => api(`/households/${state.hid}/subscriptions`, {
+      method: 'POST',
+      body: JSON.stringify({ payer_id: r.user_id, plan_id: planId, start_date: r.first_charge.slice(0, 10), member_ids: [] }),
+    }), 'Added — optimizer re-ran');
+  });
+  $('impResults').querySelectorAll('[data-reactivate]').forEach(b => b.onclick = () =>
+    act(() => api(`/subscriptions/${b.dataset.reactivate}`, { method: 'PATCH', body: JSON.stringify({ status: 'active' }) }),
+        'Marked active again'));
+}
+
+function importItem(r, i) {
+  const every = { monthly: 'every month', quarterly: 'every 3 months', yearly: 'every year' }[r.cycle];
+  const meta = `${inr(r.amount)} ${every} · ${r.charges} charges · last ${fmtDay(r.last_charge)}`
+             + (r.still_active ? ` · next around ${fmtDay(r.next_expected)}` : ' · seems to have stopped');
+  let status = '';
+  if (r.status === 'tracked') {
+    status = `<span class="ok">Already tracked</span>`;
+  } else if (r.status === 'untracked') {
+    const choose = r.candidates.length > 1
+      ? `<select data-plan-for="${i}">${r.candidates.map(c => `<option value="${c.plan_id}">${esc(c.service_name)} ${esc(c.plan_name)}</option>`).join('')}</select>`
+      : `<span>${esc(r.candidates[0].service_name)} ${esc(r.candidates[0].plan_name)}</span>`;
+    status = `<span class="new">Not in SubWatch yet</span><div class="line">${choose}<button class="small" data-add="${i}">Add</button></div>`;
+  } else if (r.status === 'still_charged') {
+    status = `<span class="bad">Marked cancelled on ${fmtDay(r.cancelled_on)}, but still charged ${fmtDay(r.last_charge)}</span>
+              <div class="line"><span class="meh">Check with the provider, or</span><button class="small" data-reactivate="${r.cancelled_subscription_id}">Mark active again</button></div>`;
+  } else if (r.status === 'cancelled') {
+    status = `<span class="meh">Cancelled — charges stopped</span>`;
+  } else if (r.status === 'no_matching_plan') {
+    status = `<span class="meh">Looks like ${esc(r.service_names)}, but no plan costs ${inr(r.amount)} ${every}</span>`;
+  } else {
+    status = `<span class="meh">Recurring, but not a subscription SubWatch knows</span>`;
+  }
+  return `
+    <div class="imp-item">
+      <div><div class="desc">${esc(r.sample_description)}</div><div class="meta">${meta}</div></div>
+      <div class="status">${status}</div>
+    </div>`;
+}
+
+// ---------- right column ----------
+function renderMembers() {
+  $('members').innerHTML = state.members.map(m => {
+    const net = Number(m.net);
+    const label = Math.abs(net) < 1 ? 'even' : net > 0 ? 'is owed' : 'owes';
+    const color = Math.abs(net) < 1 ? 'var(--ink-2)' : net > 0 ? 'var(--good-text)' : 'var(--bad-text)';
+    return `
+      <div class="member">
+        <div>
+          <div class="name">${esc(m.full_name)}<span class="role">${m.role === 'owner' ? 'owner' : ''}</span></div>
+          <div class="figures">pays ${inr(m.pays)} · fair cost ${inr(m.fair_cost)}</div>
+        </div>
+        <div class="net" style="color:${color}">${Math.abs(net) < 1 ? '—' : inr(Math.abs(net))}<small>${label}</small></div>
+      </div>`;
+  }).join('');
+}
+
+function renderSettle(rows) {
+  $('settle').innerHTML = rows.length ? rows.map(r => `
+    <div class="settle"><span>${esc(first(r.from_name))} → ${esc(first(r.to_name))}</span><span class="amt">${inr(r.amount)}</span></div>`).join('')
+    : '<div class="empty">Nothing is shared, so nobody owes anybody.</div>';
+}
+
+function renderForecast(rows) {
+  if (!rows.length) { $('forecast').innerHTML = '<div class="empty">No renewals in the next 30 days.</div>'; return; }
+  const total = rows.reduce((s, r) => s + Number(r.amount), 0);
+  $('forecast').innerHTML = rows.map(r => {
+    const d = new Date(r.renewal_date);
+    return `
+      <div class="renewal">
+        <span class="d">${d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</span>
+        <span>${esc(r.service_name)} <span class="plan">${esc(r.plan_name)} · ${esc(first(r.payer_name))}</span></span>
+        <span class="amt">${inr(r.amount)}</span>
+      </div>`;
+  }).join('') + `<div class="total"><span>Total</span><span>${inr(total)}</span></div>`;
+}
+
+function renderCategories(rows) {
+  const max = Math.max(1, ...rows.map(r => Number(r.spend)));
+  $('categories').innerHTML = rows.map(r => `
+    <div class="bar-row" title="${esc(r.category_name)}: ${inr(r.spend)} per month">
+      <span class="lab">${esc(r.category_name)}</span>
+      <div class="bar-track"><div class="bar-fill" style="width:${(Number(r.spend) / max * 100).toFixed(1)}%"></div></div>
+      <span class="val">${inr(r.spend)}</span>
+    </div>`).join('') || '<div class="empty">No active subscriptions.</div>';
+}
+
+// ---------- add form ----------
+function renderPlanOptions() {
+  const groups = {};
+  for (const p of state.plans) (groups[p.category_name] ||= []).push(p);
+  $('fPlan').innerHTML = Object.entries(groups).map(([cat, ps]) =>
+    `<optgroup label="${esc(cat)}">${ps.map(p =>
+      `<option value="${p.plan_id}">${esc(p.service_name)} — ${esc(p.plan_name)} (${inr(p.price)}/${p.billing_cycle.replace('ly', '').replace('dai', 'day')})</option>`).join('')}</optgroup>`).join('');
+  $('fPlan').onchange = updatePlanHint;
+  updatePlanHint();
+}
+
+function updatePlanHint() {
+  const p = state.plans.find(x => x.plan_id === Number($('fPlan').value));
+  $('fPlanHint').textContent = p ? (p.max_members > 1 ? `Up to ${p.max_members} people · ${inr(p.monthly_price)}/mo` : `Single person · ${inr(p.monthly_price)}/mo`) : '';
+}
+
+function renderFormMembers() {
+  const payerSel = $('fPayer');
+  const prev = Number(payerSel.value);
+  payerSel.innerHTML = state.members.map(m => `<option value="${m.user_id}">${esc(m.full_name)}</option>`).join('');
+  if (state.members.some(m => m.user_id === prev)) payerSel.value = prev;
+  payerSel.onchange = renderShareChecks;
+  renderShareChecks();
+}
+
+function renderShareChecks() {
+  const payer = Number($('fPayer').value);
+  $('fMembers').innerHTML = state.members.filter(m => m.user_id !== payer)
+    .map(m => `<label><input type="checkbox" value="${m.user_id}" /> ${esc(first(m.full_name))}</label>`).join('')
+    || '<span class="hint">Nobody else in this household</span>';
+}
+
+$('addForm').onsubmit = (e) => {
+  e.preventDefault();
+  const member_ids = [...$('fMembers').querySelectorAll('input:checked')].map(c => Number(c.value));
+  act(() => api(`/households/${state.hid}/subscriptions`, {
+    method: 'POST',
+    body: JSON.stringify({
+      payer_id: Number($('fPayer').value),
+      plan_id: Number($('fPlan').value),
+      start_date: $('fStart').value,
+      member_ids,
+    }),
+  }), 'Subscription added — optimizer re-ran');
+};
+
+$('runBtn').onclick = async () => {
+  $('runBtn').disabled = true;
+  await act(() => api(`/households/${state.hid}/alerts/refresh`, { method: 'POST' }), 'Optimizer re-ran');
+  $('runBtn').disabled = false;
+};
+
+init().catch(e => toast('Could not reach the server: ' + e.message, true));
+</script>
+</body>
+</html>
