@@ -61,6 +61,17 @@ test('a member moving out takes their plans; the others get theirs back', () => 
     assert.deepEqual(r.repair.steps.filter((s) => s.action === 'start').map((s) => [s.plan_id, s.user_ids]), [[6, [1, 2]]]);
 });
 
+test('a phone plan that leaves with its payer is restored for the others', () => {
+    const input = base();
+    // as in the database: everyone on a passive plan has a passive need for it
+    input.needs.push({ user_id: 1, service_id: 1, source: 'passive', covered_today: true },
+                     { user_id: 2, service_id: 1, source: 'passive', covered_today: true });
+    const r = simulate(input, { type: 'remove_member', user_id: 1 });     // Asha pays for the phone plan
+    assert.ok(r.coverage_lost.some((l) => l.user_id === 2 && l.service === 'Phone' && l.needed));
+    assert.deepEqual(r.repair.needs_not_restored, []);
+    assert.ok(r.repair.steps.some((s) => s.action === 'start' && s.plan_id === 1 && s.user_ids.includes(2)));
+});
+
 test('cancelling on purpose does not bring the service back', () => {
     const r = simulate(base(), { type: 'cancel_subscription', subscription_id: 11 });
     assert.ok(r.coverage_lost.filter((l) => l.service === 'Netflix').every((l) => l.given_up));

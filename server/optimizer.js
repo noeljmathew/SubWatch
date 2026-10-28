@@ -124,6 +124,16 @@ function buildModel(input, opts = {}) {
     }
 
     const required = new Set((opts.require || []).map((n) => n.user_id + ':' + n.service_id));
+    // a repair may restore a passive service (a phone plan that left with a
+    // member) with a new plan of that same service: it is in use today, so
+    // this is not suggesting anything new
+    for (const s of new Set((opts.require || []).map((n) => n.service_id))) {
+        if (!services.has(s) || !services.get(s).isPassive) continue;
+        const own = [...plans.values()]
+            .filter((p) => p.serviceId === s && p.purchasable && p.price != null && p.tier !== 'student')
+            .sort((a, b) => a.id - b.id);
+        if (own.length) candidatesByService.set(s, own);
+    }
     const unrepairable = [];
     for (const n of input.needs) {
         const key = n.user_id + ':' + n.service_id;

@@ -285,6 +285,9 @@ CREATE INDEX idx_alert_subscriptions_sub ON alert_subscriptions(subscription_id)
 -- its steps in order, and what it decided about each open v1 finding.
 -- state_hash is a fingerprint of the data the run was computed from; a run
 -- can only be applied while the household still matches it.
+-- A what-if run (kind 'what_if') stores a simulated repair: cost_before is
+-- the cost right after the simulated change, cost_after the cost once
+-- repaired, and its steps are the repair. It can never be applied.
 -- ---------------------------------------------------------------------------
 CREATE TABLE optimization_runs (
     run_id         SERIAL PRIMARY KEY,
@@ -329,6 +332,22 @@ CREATE TABLE optimization_steps (
                WHEN 'add_member' THEN subscription_id IS NOT NULL AND cardinality(user_ids) = 1
                WHEN 'cancel'     THEN subscription_id IS NOT NULL AND plan_id IS NULL
            END)
+);
+
+-- FR-36: named what-if scenarios. Only the change is stored; every time a
+-- scenario is opened it is simulated again on the household as it is then
+-- (server/whatif.js), and the result is stored as an optimization_runs row
+-- with kind 'what_if' and this scenario's name.
+CREATE TABLE scenarios (
+    scenario_id    SERIAL PRIMARY KEY,
+    household_id   INT NOT NULL REFERENCES households(household_id) ON DELETE CASCADE,
+    name           VARCHAR(100) NOT NULL,
+    change_type    VARCHAR(20) NOT NULL
+                    CHECK (change_type IN ('cancel_subscription','switch_plan','remove_member',
+                                           'remove_inclusion','raise_price')),
+    change_params  JSONB NOT NULL DEFAULT '{}' CHECK (jsonb_typeof(change_params) = 'object'),
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (household_id, name)
 );
 
 -- FR-32: each open v1 finding, as the run saw it
