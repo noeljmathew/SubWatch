@@ -35,10 +35,10 @@ async function createRun(householdId) {
         for (const s of result.steps) {
             await client.query(
                 `INSERT INTO optimization_steps (run_id, step_no, action, subscription_id, plan_id, payer_id,
-                                                 user_ids, saving, description, reason, reason_path)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                                                 user_ids, saving, description, reason, reason_path, confidence)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
                 [run.run_id, s.step_no, s.action, s.subscription_id, s.plan_id, s.payer_id,
-                 s.user_ids, s.saving, s.description, s.reason, s.reason_path]);
+                 s.user_ids, s.saving, s.description, s.reason, s.reason_path, s.confidence]);
         }
         for (const o of result.outcomes) {
             await client.query(
@@ -62,7 +62,7 @@ async function readRun(runId) {
     if (!run.rows.length) return null;
     const steps = await pool.query(
         `SELECT step_no, action, subscription_id, plan_id, payer_id, user_ids, saving,
-                description, reason, reason_path, path_label(reason_path) AS reason_label
+                description, reason, reason_path, path_label(reason_path) AS reason_label, confidence
          FROM optimization_steps WHERE run_id = $1 ORDER BY step_no`, [runId]);
     const outcomes = await pool.query(
         `SELECT o.alert_id, a.alert_type, a.fingerprint, o.outcome, o.alert_saving, o.note, a.message
@@ -72,6 +72,9 @@ async function readRun(runId) {
     return {
         ...r,
         monthly_saving: Math.round((Number(r.cost_before) - Number(r.cost_after)) * 100) / 100,
+        // FR-41: what the High and Medium steps save; Low steps are "worth a look"
+        counted_saving: Math.round(steps.rows.filter((s) => s.confidence !== 'Low')
+                                             .reduce((t, s) => t + Number(s.saving), 0) * 100) / 100,
         steps: steps.rows,
         finding_outcomes: outcomes.rows,
     };

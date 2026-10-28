@@ -5,31 +5,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { optimize } = require('./optimizer');
-
-// Build an optimizer_input-shaped document.
-//   services: [id, name, passive?]
-//   plans:    { id, service, name, tier, max, price, includes: [[serviceId, path]], purchasable }
-//   subs:     [id, payer, plan, [members]]
-//   needs:    [user, service]
-function household({ users, services, plans, subs, needs, alerts = [] }) {
-    return {
-        household_id: 1,
-        evaluated_on: '2026-10-28',
-        users: users.map(([id, name]) => ({ user_id: id, name })),
-        services: services.map(([id, name, passive]) => ({ service_id: id, name, is_passive: !!passive })),
-        needs: needs.map(([u, s]) => ({ user_id: u, service_id: s, source: 'usage', covered_today: true })),
-        subscriptions: subs.map(([id, payer, plan, members]) => ({
-            subscription_id: id, payer_id: payer, plan_id: plan, member_ids: members,
-        })),
-        plans: plans.map((p) => ({
-            plan_id: p.id, service_id: p.service, name: p.name, tier: p.tier || 'individual',
-            max_members: p.max || 1, is_purchasable: p.purchasable !== false, monthly_price: p.price,
-            covers: [{ service_id: p.service, depth: 0, path: [p.id] },
-                     ...(p.includes || []).map(([s, path]) => ({ service_id: s, depth: path.length - 1, path }))],
-        })),
-        alerts,
-    };
-}
+const { household } = require('./test-helpers');
 
 const strip = (r) => ({ ...r, elapsed_ms: 0, nodes: 0 });
 

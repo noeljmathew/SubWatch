@@ -62,7 +62,10 @@ function humanList(items) {
 // ---------------------------------------------------------------------------
 // model: the input turned into maps and indexes the search can use
 // ---------------------------------------------------------------------------
-function buildModel(input) {
+// opts.require: needs that must be covered even though no current plan covers
+// them (a what-if repair restoring what a change took away). One that no
+// plan in the input can cover at all is reported as unrepairable instead.
+function buildModel(input, opts = {}) {
     const users = new Map(input.users.map((u) => [u.user_id, u.name]));
     const services = new Map(input.services.map((s) => [s.service_id, { name: s.name, isPassive: s.is_passive }]));
 
@@ -88,6 +91,7 @@ function buildModel(input) {
                 payer: s.payer_id,
                 plan,
                 members: new Set(s.member_ids),
+                daysSinceLastUse: s.days_since_last_use == null ? null : s.days_since_last_use,
                 price: plan.price,
                 passive: services.get(plan.serviceId).isPassive,
             };
@@ -107,21 +111,6 @@ function buildModel(input) {
         seen.add(key);
         needs.push({ idx: needs.length, u, s, source });
     };
-    for (const n of input.needs) {
-        if (coveredBySubs(n.user_id, n.service_id)) addNeed(n.user_id, n.service_id, n.source);
-        else uncovered.push({ user_id: n.user_id, service_id: n.service_id, source: n.source });
-    }
-    for (const sub of subs) {
-        if (!sub.passive) continue;
-        for (const m of [...sub.members].sort((a, b) => a - b)) addNeed(m, sub.plan.serviceId, 'passive_subscription');
-    }
-
-    const needsByUser = new Map();
-    for (const n of needs) {
-        if (!needsByUser.has(n.u)) needsByUser.set(n.u, []);
-        needsByUser.get(n.u).push(n);
-    }
-
     // plans that may be started new, per service they cover
     const candidatesByService = new Map();
     const candidates = [...plans.values()]
@@ -135,6 +124,43 @@ function buildModel(input) {
         }
     }
 
+    const required = new Set((opts.require || []).map((n) => n.user_id + ':' + n.service_id));
+    // a repair may restore a passive service (a phone plan that left with a
+    // member) with a new plan of that same service: it is in use today, so
+    // this is not suggesting anything new
+    for (const s of new Set((opts.require || []).map((n) => n.service_id))) {
+        if (!services.has(s) || !services.get(s).isPassive) continue;
+        const own = [...plans.values()]
+            .filter((p) => p.serviceId === s && p.purchasable && p.price != null && p.tier !== 'student')
+            .sort((a, b) => a.id - b.id);
+        if (own.length) candidatesByService.set(s, own);
+    }
+    const unrepairable = [];
+    for (const n of input.needs) {
+        const key = n.user_id + ':' + n.service_id;
+        if (coveredBySubs(n.user_id, n.service_id)) {
+            addNeed(n.user_id, n.service_id, n.source);
+        } else if (required.has(key)) {
+            if (candidatesByService.has(n.service_id) || subs.some((s) => s.plan.covers.has(n.service_id))) {
+                addNeed(n.user_id, n.service_id, n.source);
+            } else {
+                unrepairable.push({ user_id: n.user_id, service_id: n.service_id, source: n.source });
+            }
+        } else {
+            uncovered.push({ user_id: n.user_id, service_id: n.service_id, source: n.source });
+        }
+    }
+    for (const sub of subs) {
+        if (!sub.passive) continue;
+        for (const m of [...sub.members].sort((a, b) => a - b)) addNeed(m, sub.plan.serviceId, 'passive_subscription');
+    }
+
+    const needsByUser = new Map();
+    for (const n of needs) {
+        if (!needsByUser.has(n.u)) needsByUser.set(n.u, []);
+        needsByUser.get(n.u).push(n);
+    }
+
     // no splitting: a service never ends up with more plans than it has
     // today. A service with none today (a bundle like Apple One) may get one.
     const planLimit = new Map();
@@ -142,7 +168,10 @@ function buildModel(input) {
     const limitOf = (serviceId) => Math.max(planLimit.get(serviceId) || 0, 1);
 
     const currentCost = subs.reduce((t, s) => t + s.price, 0);
-    return { input, users, services, plans, subs, needs, needsByUser, candidatesByService, uncovered, currentCost, limitOf };
+    const currentValid = needs.every((n) => coveredBySubs(n.u, n.s));
+    const silent = new Set(input.silent_user_ids || []);
+    return { input, users, services, plans, subs, needs, needsByUser, candidatesByService, uncovered,
+             unrepairable, currentCost, currentValid, limitOf, silent };
 }
 
 // ---------------------------------------------------------------------------
@@ -309,7 +338,9 @@ function greedy(model, pinned) {
 function search(model, pinned, deadline, opts = {}) {
     const useBound = opts.bound !== false;
     const dominance = opts.dominance !== false;
-    let best = currentConfig(model);
+    // today's configuration is the first upper bound, unless a required need
+    // (what-if repair) means it no longer covers everything
+    let best = model.currentValid ? currentConfig(model) : null;
     const g = greedy(model, pinned);
     if (g && better(g, best)) best = g;
 
@@ -338,7 +369,7 @@ function search(model, pinned, deadline, opts = {}) {
             if (better(cand, best)) best = cand;
             return;
         }
-        if (useBound && (cost + lb > best.cost || (cost + lb === best.cost && changes >= best.changes))) return;
+        if (useBound && best && (cost + lb > best.cost || (cost + lb === best.cost && changes >= best.changes))) return;
 
         for (const o of pick.opts) {
             const undo = st.apply(o, pick.n);
@@ -423,6 +454,7 @@ function buildSteps(model, config) {
     const first = (u) => model.users.get(u).split(' ')[0];
     const names = (ids) => humanList(ids.map(first));
     const svc = (plan) => model.services.get(plan.serviceId).name;
+    const anySilent = (members) => [...members].some((u) => model.silent.has(u));
 
     // payer of a new plan: whoever paid for the most expensive plan it replaces
     // (lowest subscription id on ties), otherwise its first member
@@ -447,6 +479,9 @@ function buildSteps(model, config) {
             switched.add(d.id);
             const downgrade = inst.plan.max < d.plan.max;
             steps.push({
+                // a downgrade rests on someone no longer using it: Medium at
+                // most, Low if anyone on it has gone silent
+                confidence: !downgrade ? 'High' : anySilent(d.members) ? 'Low' : 'Medium',
                 action: 'switch', subscription_id: d.id, plan_id: inst.plan.id, payer_id: inst.payer,
                 user_ids: inst.members, saving: d.price - inst.plan.price,
                 description: `Switch ${first(d.payer)}'s ${svc(d.plan)} from ${d.plan.name} to ${inst.plan.name} (${inr(inst.plan.price)}/mo)`,
@@ -459,6 +494,7 @@ function buildSteps(model, config) {
         }
         const coveredServices = [...new Set(dropped.filter((d) => links.get(d.id).includes(inst)).map((d) => svc(d.plan)))].sort();
         steps.push({
+            confidence: 'High',
             action: 'start', subscription_id: null, plan_id: inst.plan.id, payer_id: inst.payer,
             user_ids: inst.members, saving: -inst.plan.price,
             description: `Start ${svc(inst.plan)} ${inst.plan.name} (${inr(inst.plan.price)}/mo), paid by ${first(inst.payer)}`
@@ -473,6 +509,7 @@ function buildSteps(model, config) {
     for (const inst of config.filter((i) => i.sub && i.added.length).sort((a, b) => a.sub.id - b.sub.id)) {
         for (const u of inst.added) {
             steps.push({
+                confidence: 'High',
                 action: 'add_member', subscription_id: inst.sub.id, plan_id: null, payer_id: null,
                 user_ids: [u], saving: 0,
                 description: `Add ${first(u)} to ${first(inst.sub.payer)}'s ${svc(inst.plan)} ${inst.plan.name}`,
@@ -503,7 +540,14 @@ function buildSteps(model, config) {
         } else {
             reason = `Nobody on it has used ${svc(d.plan)} in the last 30 days`;
         }
+        // covered elsewhere: High. Unused: High after 60 days, Medium before,
+        // Low if anyone on it has logged nothing at all for 45+ days (FR-40),
+        // the same rules as the waste finding's evidence
+        const confidence = needers.length ? 'High'
+            : anySilent(d.members) ? 'Low'
+            : d.daysSinceLastUse == null || d.daysSinceLastUse >= 60 ? 'High' : 'Medium';
         steps.push({
+            confidence,
             action: 'cancel', subscription_id: d.id, plan_id: null, payer_id: null, user_ids: [],
             saving: d.price,
             description: `Cancel ${first(d.payer)}'s ${svc(d.plan)} (${d.plan.name}), ${inr(d.price)}/mo`,
@@ -581,7 +625,7 @@ function optimize(input, opts = {}) {
     const minSaving = paise(opts.minSaving ?? MIN_SAVING);
     const deadline = started + (opts.timeCapMs ?? TIME_CAP_MS);
     const searchOpts = opts.exhaustive ? { bound: false, dominance: false } : {};
-    const model = buildModel(input);
+    const model = buildModel(input, opts);
 
     // MIN_SAVING: every subscription the answer drops must be worth dropping
     // on its own. Its marginal saving is what the best answer costs with that
@@ -596,6 +640,7 @@ function optimize(input, opts = {}) {
     let r = search(model, pinned, deadline, searchOpts);
     nodes += r.nodes;
     optimal = r.optimal;
+    if (!r.best) throw new Error('optimizer: no configuration covers every required need within the plan limits');
     let changed = true;
     while (changed && Date.now() <= deadline) {
         changed = false;
@@ -609,6 +654,7 @@ function optimize(input, opts = {}) {
                 alt = search(model, new Set([...pinned, d.id]), deadline, searchOpts);
                 nodes += alt.nodes;
                 optimal = optimal && alt.optimal;
+                if (!alt.best) continue;           // keeping it leaves no valid configuration
                 marginal = alt.best.cost - r.best.cost;
             }
             if (marginal < minSaving) {
@@ -634,12 +680,19 @@ function optimize(input, opts = {}) {
         cost_before: rupees(model.currentCost),
         cost_after: rupees(costAfter),
         saving: rupees(model.currentCost - costAfter),
+        // FR-41: only High and Medium steps count toward the saving shown
+        counted_saving: rupees(steps.filter((s) => s.confidence !== 'Low').reduce((t, s) => t + s.saving, 0)),
         is_optimal: optimal,
         elapsed_ms: Date.now() - started,
         nodes,
         steps: steps.map((s) => ({ ...s, saving: rupees(s.saving) })),
         outcomes: alertOutcomes(model, result.config, steps),
         uncovered_needs: model.uncovered,
+        unrepairable_needs: model.unrepairable,
+        // every need in the input that the final configuration leaves uncovered
+        final_uncovered: input.needs
+            .filter((n) => !coveringInstance(result.config, n.user_id, n.service_id))
+            .map((n) => ({ user_id: n.user_id, service_id: n.service_id, source: n.source })),
     };
 }
 

@@ -258,6 +258,11 @@ CREATE TABLE alerts (
     status                    VARCHAR(10) NOT NULL DEFAULT 'open'
                                CHECK (status IN ('open','dismissed','resolved')),
     created_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- FR-39 / FR-41: how sure the finding is, from its finding_evidence rows
+    -- (set by refresh_alerts); only High and Medium count toward savings
+    confidence                VARCHAR(6) NOT NULL DEFAULT 'Medium'
+                               CHECK (confidence IN ('High','Medium','Low')),
+    counts_toward_savings     BOOLEAN GENERATED ALWAYS AS (confidence <> 'Low') STORED,
     UNIQUE (household_id, fingerprint)
 );
 CREATE INDEX idx_alerts_household_status ON alerts(household_id, status);
@@ -280,11 +285,45 @@ CREATE TABLE alert_subscriptions (
 );
 CREATE INDEX idx_alert_subscriptions_sub ON alert_subscriptions(subscription_id);
 
+-- FR-39: the stored facts behind a finding. weight says how much the fact
+-- supports the finding; a negative weight undermines it. The weights, and the
+-- query that turns them into High / Medium / Low, are in detection.sql
+-- (v_finding_evidence, v_finding_confidence).
+--   coverage  a plan already covers the service (reason path)
+--   price     the catalog price the saving is computed from
+--   usage     what the usage logs show (no use for N days, a falling trend)
+--   silence   a member on the subscription has logged nothing at all for a
+--             long time, so "unused" may just mean "not logged" (FR-40)
+-- source_ref names the row the fact comes from ('plan:41', 'user:9', ...).
+CREATE TABLE finding_evidence (
+    evidence_id    BIGSERIAL PRIMARY KEY,
+    alert_id       INT NOT NULL REFERENCES alerts(alert_id) ON DELETE CASCADE,
+    evidence_type  VARCHAR(10) NOT NULL CHECK (evidence_type IN ('coverage','price','usage','silence')),
+    source_ref     TEXT NOT NULL,
+    value          TEXT NOT NULL,
+    weight         INT NOT NULL CHECK (weight BETWEEN -5 AND 5),
+    CHECK ((evidence_type = 'silence') = (weight < 0))
+);
+CREATE INDEX idx_finding_evidence_alert ON finding_evidence(alert_id);
+
+-- FR-40: per person, how long since they logged any usage at all. flagged
+-- once it reaches 45 days; refreshed by refresh_alerts.
+CREATE TABLE usage_data_quality (
+    user_id         INT PRIMARY KEY REFERENCES household_members(user_id) ON DELETE CASCADE,
+    last_logged_at  TIMESTAMPTZ,
+    days_silent     INT NOT NULL CHECK (days_silent >= 0),
+    flagged         BOOLEAN NOT NULL,
+    checked_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- ---------------------------------------------------------------------------
 -- household optimizer (FR-29 to FR-33). One row per run of the optimizer,
 -- its steps in order, and what it decided about each open v1 finding.
 -- state_hash is a fingerprint of the data the run was computed from; a run
 -- can only be applied while the household still matches it.
+-- A what-if run (kind 'what_if') stores a simulated repair: cost_before is
+-- the cost right after the simulated change, cost_after the cost once
+-- repaired, and its steps are the repair. It can never be applied.
 -- ---------------------------------------------------------------------------
 CREATE TABLE optimization_runs (
     run_id         SERIAL PRIMARY KEY,
@@ -322,6 +361,9 @@ CREATE TABLE optimization_steps (
     description      TEXT NOT NULL,
     reason           TEXT NOT NULL,
     reason_path      INT[],
+    -- same scale as alerts.confidence; a Low step is left out of the run's
+    -- counted saving (FR-41), a downgrade is Medium at most
+    confidence       VARCHAR(6) NOT NULL DEFAULT 'High' CHECK (confidence IN ('High','Medium','Low')),
     PRIMARY KEY (run_id, step_no),
     CHECK (CASE action
                WHEN 'start'      THEN subscription_id IS NULL AND plan_id IS NOT NULL AND payer_id IS NOT NULL
@@ -329,6 +371,22 @@ CREATE TABLE optimization_steps (
                WHEN 'add_member' THEN subscription_id IS NOT NULL AND cardinality(user_ids) = 1
                WHEN 'cancel'     THEN subscription_id IS NOT NULL AND plan_id IS NULL
            END)
+);
+
+-- FR-36: named what-if scenarios. Only the change is stored; every time a
+-- scenario is opened it is simulated again on the household as it is then
+-- (server/whatif.js), and the result is stored as an optimization_runs row
+-- with kind 'what_if' and this scenario's name.
+CREATE TABLE scenarios (
+    scenario_id    SERIAL PRIMARY KEY,
+    household_id   INT NOT NULL REFERENCES households(household_id) ON DELETE CASCADE,
+    name           VARCHAR(100) NOT NULL,
+    change_type    VARCHAR(20) NOT NULL
+                    CHECK (change_type IN ('cancel_subscription','switch_plan','remove_member',
+                                           'remove_inclusion','raise_price')),
+    change_params  JSONB NOT NULL DEFAULT '{}' CHECK (jsonb_typeof(change_params) = 'object'),
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (household_id, name)
 );
 
 -- FR-32: each open v1 finding, as the run saw it

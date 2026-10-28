@@ -19,7 +19,12 @@ router.get('/households/:id/alerts', async (req, res, next) => {
                                   'reason_path', r.reason_path, 'reason_label', r.reason_label,
                                   'member_ids', r.member_ids, 'member_names', r.member_names)
                               ORDER BY r.role DESC, r.subscription_id)
-                              FROM v_alert_reasons r WHERE r.alert_id = a.alert_id), '[]') AS reasons
+                              FROM v_alert_reasons r WHERE r.alert_id = a.alert_id), '[]') AS reasons,
+                    COALESCE((SELECT json_agg(json_build_object(
+                                  'evidence_type', e.evidence_type, 'source_ref', e.source_ref,
+                                  'value', e.value, 'weight', e.weight)
+                              ORDER BY e.evidence_type, e.source_ref)
+                              FROM finding_evidence e WHERE e.alert_id = a.alert_id), '[]') AS evidence
              FROM alerts a
              LEFT JOIN plans p     ON p.plan_id = a.recommended_plan_id
              LEFT JOIN services sv ON sv.service_id = p.service_id

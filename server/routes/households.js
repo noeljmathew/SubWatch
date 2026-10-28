@@ -3,9 +3,6 @@ const { pool } = require('../db');
 
 const router = express.Router();
 
-// alert types that are concrete savings vs. "worth a look"
-const HARD_TYPES = ['hidden_duplicate', 'consolidation', 'spare_capacity', 'bundle', 'waste'];
-
 // GET /api/households
 router.get('/', async (req, res, next) => {
     try {
@@ -59,19 +56,21 @@ router.get('/:id/summary', async (req, res, next) => {
             [id]
         );
         const alerts = await pool.query(
-            `SELECT alert_type, COUNT(*)::int AS count, COALESCE(SUM(potential_monthly_savings), 0) AS savings
+            `SELECT alert_type, confidence, COUNT(*)::int AS count, COALESCE(SUM(potential_monthly_savings), 0) AS savings
              FROM alerts
              WHERE household_id = $1 AND status = 'open'
-             GROUP BY alert_type`,
+             GROUP BY alert_type, confidence`,
+            [id]
+        );
+        // FR-41: only High and Medium concrete findings count; Low ones are
+        // "worth a look" (v_household_savings holds the same rule in SQL)
+        const totals = await pool.query(
+            `SELECT savings_found, worth_a_look, low_confidence_findings FROM v_household_savings WHERE household_id = $1`,
             [id]
         );
 
         const monthlySpend = Number(spend.rows[0].monthly_spend);
-        const hard = alerts.rows.filter(a => HARD_TYPES.includes(a.alert_type))
-                                .reduce((s, a) => s + Number(a.savings), 0);
-        const soft = alerts.rows.filter(a => !HARD_TYPES.includes(a.alert_type))
-                                .reduce((s, a) => s + Number(a.savings), 0);
-        const savings = Math.min(hard, monthlySpend);
+        const savings = Number(totals.rows[0].savings_found);
         const efficiency = monthlySpend > 0 ? Math.round(100 * (1 - savings / monthlySpend)) : 100;
 
         res.json({
@@ -79,7 +78,8 @@ router.get('/:id/summary', async (req, res, next) => {
             active_subscriptions: spend.rows[0].active_subscriptions,
             monthly_spend: monthlySpend,
             savings_found: Math.round(savings * 100) / 100,
-            worth_a_look: Math.round(soft * 100) / 100,
+            worth_a_look: Math.round(Number(totals.rows[0].worth_a_look) * 100) / 100,
+            low_confidence_findings: totals.rows[0].low_confidence_findings,
             efficiency_score: efficiency,
             spend_by_category: byCategory.rows,
             alert_counts: alerts.rows,

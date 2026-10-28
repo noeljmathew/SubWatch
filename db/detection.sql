@@ -718,6 +718,139 @@ SELECT household_id, 'overlap', least_used_subscription_ids, '{}'::int[], NULL,
 FROM v_category_overlap;
 
 -- ---------------------------------------------------------------------------
+-- v_usage_data_quality — FR-40: how long each person has logged nothing at
+-- all, across every subscription (since they joined, if never). 45 days or
+-- more is flagged: their usage-based findings become Low.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE VIEW v_usage_data_quality AS
+SELECT hm.household_id, hm.user_id, lu.last_logged_at,
+       GREATEST(0, EXTRACT(DAY FROM now() - COALESCE(lu.last_logged_at, hm.joined_at::timestamptz)))::int AS days_silent,
+       EXTRACT(DAY FROM now() - COALESCE(lu.last_logged_at, hm.joined_at::timestamptz)) >= 45 AS flagged
+FROM household_members hm
+LEFT JOIN LATERAL (SELECT MAX(ul.used_at) AS last_logged_at FROM usage_logs ul WHERE ul.user_id = hm.user_id) lu ON true;
+
+-- ---------------------------------------------------------------------------
+-- v_finding_evidence — FR-39: the facts behind every open finding, with
+-- documented weights:
+--   coverage  3  hidden duplicate: another plan already gives them the service
+--             2  family plan / free spot / bundle: a plan covers them all
+--   price     1  the catalog price behind the saving (every finding)
+--   usage     2  waste: no use for 60+ days (or never, 60+ days in)
+--             1  waste: no use for 30-59 days
+--             1  usage falling: the trend is a projection
+--             1  overlap: one service barely used next to the others
+--   silence  -3  someone on it has logged nothing for 45+ days (FR-40);
+--                only for the usage-based types (waste, churn_risk, overlap)
+-- v_finding_confidence turns these into High / Medium / Low.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE VIEW v_finding_evidence AS
+-- coverage: the stored reason path of each subject
+SELECT a.alert_id, 'coverage'::varchar AS evidence_type,
+       'path:' || array_to_string(x.reason_path, '>') AS source_ref,
+       path_label(x.reason_path) || ' covers '
+           || human_list((SELECT array_agg(first_name(u.full_name) ORDER BY u.full_name)
+                            FROM subscription_members sm JOIN users u ON u.user_id = sm.user_id
+                           WHERE sm.subscription_id = x.subscription_id)) AS value,
+       CASE WHEN a.alert_type = 'hidden_duplicate' THEN 3 ELSE 2 END AS weight
+FROM alerts a
+JOIN alert_subscriptions x ON x.alert_id = a.alert_id AND x.role = 'subject' AND x.reason_path IS NOT NULL
+WHERE a.status = 'open'
+UNION ALL
+-- price: each subject's plan, and the recommended plan, at today's catalog price
+SELECT a.alert_id, 'price',
+       'price:' || ph.plan_id || '@' || ph.valid_from,
+       sv.name || ' ' || pc.name || ' costs ' || inr(monthly_equivalent(ph.price, pc.billing_cycle))
+           || '/mo (catalog price since ' || ph.valid_from || ')',
+       1
+FROM alerts a
+JOIN LATERAL (SELECT s.plan_id FROM alert_subscriptions x JOIN subscriptions s ON s.subscription_id = x.subscription_id
+              WHERE x.alert_id = a.alert_id AND x.role = 'subject'
+              UNION
+              SELECT a.recommended_plan_id WHERE a.recommended_plan_id IS NOT NULL) pl ON true
+JOIN plan_catalog pc        ON pc.plan_id = pl.plan_id
+JOIN services sv            ON sv.service_id = pc.service_id
+JOIN plan_price_history ph  ON ph.plan_id = pc.plan_id AND ph.valid_during @> CURRENT_DATE
+WHERE a.status = 'open'
+UNION ALL
+-- usage: what the logs say about each subject, for the usage-based types
+SELECT a.alert_id, 'usage',
+       'subscription:' || d.subscription_id,
+       CASE a.alert_type
+           WHEN 'waste' THEN d.service_name || CASE WHEN d.total_sessions = 0
+                                                    THEN ' never used in ' || d.days_since_last_use || ' days'
+                                                    ELSE ' last used ' || d.days_since_last_use || ' days ago' END
+           WHEN 'churn_risk' THEN d.service_name || ' sessions per month: '
+                                  || array_to_string(cr.trend, ' → ') || ', heading to zero'
+           ELSE d.service_name || ': ' || d.sessions_30d || ' session(s) in the last 30 days'
+       END,
+       CASE WHEN a.alert_type = 'waste' AND d.days_since_last_use >= 60 THEN 2 ELSE 1 END
+FROM alerts a
+JOIN alert_subscriptions x   ON x.alert_id = a.alert_id AND x.role = 'subject'
+JOIN v_subscription_detail d ON d.subscription_id = x.subscription_id
+LEFT JOIN v_churn_risk cr    ON cr.subscription_id = d.subscription_id
+WHERE a.status = 'open' AND a.alert_type IN ('waste', 'churn_risk', 'overlap')
+UNION ALL
+-- silence: a member of a usage-based subject who has logged nothing for 45+ days
+SELECT DISTINCT a.alert_id, 'silence',
+       'user:' || q.user_id,
+       u.full_name || ' has logged no usage at all for ' || q.days_silent || ' days',
+       -3
+FROM alerts a
+JOIN alert_subscriptions x   ON x.alert_id = a.alert_id AND x.role = 'subject'
+JOIN subscription_members sm ON sm.subscription_id = x.subscription_id
+JOIN usage_data_quality q    ON q.user_id = sm.user_id AND q.flagged
+JOIN users u                 ON u.user_id = q.user_id
+WHERE a.status = 'open' AND a.alert_type IN ('waste', 'churn_risk', 'overlap');
+
+-- ---------------------------------------------------------------------------
+-- v_finding_confidence — evidence rows to High / Medium / Low. Each evidence
+-- type counts once, at its strongest row (so three subject prices don't
+-- triple-count); score = the sum. Any silence row makes it Low outright.
+--   score >= 3 → High   score = 2 → Medium   otherwise → Low
+-- With the weights above: duplicates 4, family plan / free spot / bundle 3,
+-- long-unused waste 3, recent waste 2, falling usage 2, overlap 2.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE VIEW v_finding_confidence AS
+WITH per_type AS (
+    SELECT alert_id, evidence_type, MAX(weight) AS weight
+    FROM finding_evidence
+    GROUP BY alert_id, evidence_type
+)
+SELECT alert_id,
+       COALESCE(SUM(weight) FILTER (WHERE evidence_type <> 'silence'), 0)::int AS score,
+       bool_or(evidence_type = 'silence') AS silent,
+       CASE WHEN bool_or(evidence_type = 'silence')                                   THEN 'Low'
+            WHEN COALESCE(SUM(weight) FILTER (WHERE evidence_type <> 'silence'), 0) >= 3 THEN 'High'
+            WHEN COALESCE(SUM(weight) FILTER (WHERE evidence_type <> 'silence'), 0) = 2  THEN 'Medium'
+            ELSE 'Low'
+       END::varchar AS confidence
+FROM per_type
+GROUP BY alert_id;
+
+-- ---------------------------------------------------------------------------
+-- v_household_savings — FR-41: the totals the summary shows. Concrete types
+-- with High or Medium confidence are "savings found" (capped at spend, as in
+-- v1); everything else, Low findings included, is "worth a look".
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE VIEW v_household_savings AS
+SELECT h.household_id,
+       sp.spend AS monthly_spend,
+       LEAST(COALESCE(SUM(a.potential_monthly_savings)
+                      FILTER (WHERE a.counts_toward_savings
+                                AND a.alert_type IN ('hidden_duplicate','consolidation','spare_capacity','bundle','waste')), 0),
+             sp.spend) AS savings_found,
+       COALESCE(SUM(a.potential_monthly_savings)
+                FILTER (WHERE NOT a.counts_toward_savings
+                           OR a.alert_type NOT IN ('hidden_duplicate','consolidation','spare_capacity','bundle','waste')), 0)
+           AS worth_a_look,
+       COUNT(a.alert_id) FILTER (WHERE NOT a.counts_toward_savings)::int AS low_confidence_findings
+FROM households h
+CROSS JOIN LATERAL (SELECT COALESCE(SUM(d.monthly_price), 0) AS spend FROM v_subscription_detail d
+                    WHERE d.household_id = h.household_id AND d.status = 'active') sp
+LEFT JOIN alerts a ON a.household_id = h.household_id AND a.status = 'open'
+GROUP BY h.household_id, sp.spend;
+
+-- ---------------------------------------------------------------------------
 -- v_alert_reasons — the reason path behind each subscription in a finding,
 -- as text, with the members it covers (FR-38): the members of the subject
 -- subscription, who all keep the service through that path
@@ -845,6 +978,29 @@ END;
 $$;
 
 -- ---------------------------------------------------------------------------
+-- refresh_usage_data_quality — sync usage_data_quality with
+-- v_usage_data_quality for one household (or all)
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE PROCEDURE refresh_usage_data_quality(p_household_id INT DEFAULT NULL)
+LANGUAGE plpgsql
+SET jit = off
+AS $$
+BEGIN
+    PERFORM lock_household(p_household_id);
+
+    DELETE FROM usage_data_quality q
+    USING household_members hm
+    WHERE hm.user_id = q.user_id
+      AND (p_household_id IS NULL OR hm.household_id = p_household_id);
+
+    INSERT INTO usage_data_quality (user_id, last_logged_at, days_silent, flagged)
+    SELECT user_id, last_logged_at, days_silent, flagged
+    FROM v_usage_data_quality
+    WHERE p_household_id IS NULL OR household_id = p_household_id;
+END;
+$$;
+
+-- ---------------------------------------------------------------------------
 -- set_member_need — the owner's override for one (person, service):
 --   true   they need it, whatever the data says
 --   false  they don't, and the automatic need stays out
@@ -895,7 +1051,8 @@ AS $$
 BEGIN
     PERFORM lock_household(p_household_id);
 
-    -- needs first: they follow the same data the findings do
+    -- data quality and needs first: they follow the same data the findings do
+    CALL refresh_usage_data_quality(p_household_id);
     CALL refresh_member_needs(p_household_id);
 
     -- snapshot the findings once so all statements below see the same thing
@@ -946,6 +1103,29 @@ BEGIN
     JOIN alerts a ON a.household_id = f.household_id AND a.fingerprint = f.fingerprint AND a.status = 'open'
     CROSS JOIN LATERAL UNNEST(f.source_ids) AS sid
     ON CONFLICT DO NOTHING;
+
+    -- 4. evidence and confidence for open alerts (FR-39 to FR-41)
+    DELETE FROM finding_evidence e
+    USING alerts a
+    WHERE a.alert_id = e.alert_id
+      AND a.status = 'open'
+      AND (p_household_id IS NULL OR a.household_id = p_household_id);
+
+    INSERT INTO finding_evidence (alert_id, evidence_type, source_ref, value, weight)
+    SELECT v.alert_id, v.evidence_type, v.source_ref, v.value, v.weight
+    FROM v_finding_evidence v
+    JOIN alerts a ON a.alert_id = v.alert_id
+    WHERE p_household_id IS NULL OR a.household_id = p_household_id
+    ORDER BY v.alert_id, v.evidence_type, v.source_ref;
+
+    UPDATE alerts a
+       SET confidence = COALESCE(c.confidence, 'Low')
+      FROM alerts a2
+      LEFT JOIN v_finding_confidence c ON c.alert_id = a2.alert_id
+     WHERE a.alert_id = a2.alert_id
+       AND a.status = 'open'
+       AND (p_household_id IS NULL OR a.household_id = p_household_id)
+       AND a.confidence IS DISTINCT FROM COALESCE(c.confidence, 'Low');
 
     DROP TABLE _findings;
 END;
@@ -1092,6 +1272,10 @@ $$;
 --                  needed service, each with the services it covers (shortest
 --                  path to each, depth 0 = its own service)
 --   alerts         open v1 findings, so the run can say which it adopts
+--   inclusions     every entitlement edge valid on p_date, so a what-if can
+--                  remove one and recompute coverage (server/whatif.js)
+--   silent_user_ids  members flagged in usage_data_quality (FR-40), so steps
+--                  that rest on missing usage can be marked Low
 -- Every array is ordered, so the same data always gives the same document
 -- (and the same optimizer_state_hash).
 -- ---------------------------------------------------------------------------
@@ -1108,7 +1292,10 @@ AS $$
     subs AS (
         SELECT s.subscription_id, s.payer_id, s.plan_id,
                (SELECT array_agg(sm.user_id ORDER BY sm.user_id)
-                  FROM subscription_members sm WHERE sm.subscription_id = s.subscription_id) AS member_ids
+                  FROM subscription_members sm WHERE sm.subscription_id = s.subscription_id) AS member_ids,
+               EXTRACT(DAY FROM now() - COALESCE((SELECT MAX(ul.used_at) FROM usage_logs ul
+                                                   WHERE ul.subscription_id = s.subscription_id),
+                                                  s.start_date::timestamptz))::int AS days_since_last_use
         FROM subscriptions s
         JOIN members m ON m.user_id = s.payer_id
         WHERE s.status = 'active'
@@ -1154,9 +1341,13 @@ AS $$
                     FROM needs),
         'subscriptions', (SELECT COALESCE(jsonb_agg(jsonb_build_object('subscription_id', subscription_id,
                                                                        'payer_id', payer_id, 'plan_id', plan_id,
-                                                                       'member_ids', member_ids)
+                                                                       'member_ids', member_ids,
+                                                                       'days_since_last_use', days_since_last_use)
                                                     ORDER BY subscription_id), '[]')
                             FROM subs),
+        'silent_user_ids', (SELECT COALESCE(jsonb_agg(q.user_id ORDER BY q.user_id), '[]')
+                              FROM usage_data_quality q JOIN members m ON m.user_id = q.user_id
+                             WHERE q.flagged),
         'plans', (SELECT COALESCE(jsonb_agg(jsonb_build_object(
                                      'plan_id', p.plan_id, 'service_id', p.service_id, 'name', p.name,
                                      'tier', p.tier, 'max_members', p.max_members,
@@ -1180,7 +1371,13 @@ AS $$
                                                                WHERE x.alert_id = a.alert_id AND x.role = 'source'), '{}'))
                                    ORDER BY a.alert_id), '[]')
                      FROM alerts a
-                     WHERE a.household_id = p_household_id AND a.status = 'open')
+                     WHERE a.household_id = p_household_id AND a.status = 'open'),
+        'inclusions', (SELECT COALESCE(jsonb_agg(jsonb_build_object(
+                                          'parent_plan_id', e.plan_id, 'included_plan_id', e.included_plan_id,
+                                          'included_service_id', ip.service_id)
+                                       ORDER BY e.plan_id, e.included_plan_id), '[]')
+                         FROM entitlements_at(p_date) e
+                         JOIN plan_catalog ip ON ip.plan_id = e.included_plan_id)
     )
 $$;
 
@@ -1230,6 +1427,9 @@ BEGIN
     END IF;
     PERFORM lock_household(v_hh);                      -- household lock first, then the row
     SELECT * INTO r FROM optimization_runs WHERE run_id = p_run_id FOR UPDATE;
+    IF r.kind <> 'optimize' THEN
+        RAISE EXCEPTION 'Run % is a what-if simulation and cannot be applied', p_run_id USING ERRCODE = 'check_violation';
+    END IF;
     IF r.status <> 'proposed' THEN
         RAISE EXCEPTION 'This optimizer run was already %', r.status USING ERRCODE = 'check_violation';
     END IF;

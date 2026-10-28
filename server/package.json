@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "test": "node --test optimizer.test.js"
+    "test": "node --test optimizer.test.js whatif.test.js"
   },
   "keywords": [],
   "author": "",
