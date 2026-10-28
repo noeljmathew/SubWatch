@@ -617,7 +617,9 @@ $$;
 
 -- ---------------------------------------------------------------------------
 -- v_findings — every detector's output in one shape, with a stable
--- fingerprint and a plain-English message
+-- fingerprint and a plain-English message. subject_paths is a JSON array
+-- parallel to subject_ids: element i is the reason path (plan ids) for
+-- subject i, or NULL for findings with no path (usage-based ones)
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE VIEW v_findings AS
 SELECT household_id, 'hidden_duplicate'::text AS alert_type,
@@ -635,7 +637,8 @@ SELECT household_id, 'hidden_duplicate'::text AS alert_type,
                   first_name(payer_name), inr(monthly_price), service_name, plan_name,
                   first_name(via_payer), via_service, path_label)
        END AS message,
-       monthly_price AS savings
+       monthly_price AS savings,
+       jsonb_build_array(to_jsonb(path)) AS subject_paths
 FROM v_hidden_duplicates
 UNION ALL
 SELECT household_id, 'consolidation', subscription_ids, '{}'::int[], recommended_plan_id,
@@ -647,7 +650,11 @@ SELECT household_id, 'consolidation', subscription_ids, '{}'::int[], recommended
               max_members, CASE WHEN plans_needed > 1 THEN ' each' ELSE '' END,
               CASE people WHEN 2 THEN 'both of them' ELSE 'all ' || people END,
               inr(new_cost)),
-       savings
+       savings,
+       -- every subject is covered by the recommended shared plan (x.sid keeps
+       -- the aggregate inside this subquery rather than the outer query)
+       (SELECT jsonb_agg(CASE WHEN x.sid IS NOT NULL THEN to_jsonb(ARRAY[recommended_plan_id]) END ORDER BY x.ord)
+          FROM UNNEST(subscription_ids) WITH ORDINALITY AS x(sid, ord))
 FROM v_consolidation
 UNION ALL
 SELECT household_id, 'spare_capacity', ARRAY[subscription_id], ARRAY[host_subscription_id], NULL,
@@ -655,7 +662,9 @@ SELECT household_id, 'spare_capacity', ARRAY[subscription_id], ARRAY[host_subscr
        format('%s''s %s %s has a free spot (%s of %s used). %s could join it and cancel their own %s plan (%s/mo).',
               first_name(host_payer), service_name, host_plan, member_count, max_members,
               first_name(person), own_plan, inr(own_cost)),
-       own_cost
+       own_cost,
+       (SELECT jsonb_build_array(to_jsonb(ARRAY[s.plan_id])) FROM subscriptions s
+         WHERE s.subscription_id = host_subscription_id)
 FROM v_spare_capacity
 UNION ALL
 SELECT household_id, 'bundle', replaced_ids, '{}'::int[], recommended_plan_id,
@@ -664,21 +673,34 @@ SELECT household_id, 'bundle', replaced_ids, '{}'::int[], recommended_plan_id,
               human_list(replaced_names), inr(current_cost), bundle_service, bundle_plan,
               CASE WHEN covers_everything THEN 'all of them' ELSE 'these (and more)' END,
               inr(bundle_cost)),
-       savings
+       savings,
+       -- per replaced subscription, the shortest path from the bundle to its service
+       (SELECT jsonb_agg(to_jsonb((SELECT pc.path
+                                     FROM v_plan_coverage pc
+                                     JOIN subscriptions s ON s.subscription_id = x.sid
+                                     JOIN plan_catalog p  ON p.plan_id = s.plan_id
+                                    WHERE pc.plan_id = recommended_plan_id
+                                      AND pc.service_id = p.service_id
+                                      AND pc.depth > 0
+                                    ORDER BY pc.depth, pc.path
+                                    LIMIT 1)) ORDER BY x.ord)
+          FROM UNNEST(replaced_ids) WITH ORDINALITY AS x(sid, ord))
 FROM v_bundle_opportunities
 UNION ALL
 SELECT household_id, 'churn_risk', ARRAY[subscription_id], '{}'::int[], NULL,
        'churn:' || subscription_id,
        format('%s (%s) usage is falling: %s sessions per month over the last 6 months. At this rate nobody will be using it in about %s days.',
               service_name, plan_name, array_to_string(trend, ' → '), days_until_unused),
-       monthly_price
+       monthly_price,
+       NULL::jsonb
 FROM v_churn_risk
 UNION ALL
 SELECT household_id, 'waste', ARRAY[subscription_id], '{}'::int[], NULL,
        'waste:' || subscription_id,
        format('%s (%s) %s. %s pays %s/mo for it.',
               service_name, plan_name, reason, first_name(payer_name), inr(monthly_price)),
-       monthly_price
+       monthly_price,
+       NULL::jsonb
 FROM v_waste
 UNION ALL
 SELECT household_id, 'overlap', least_used_subscription_ids, '{}'::int[], NULL,
@@ -686,8 +708,26 @@ SELECT household_id, 'overlap', least_used_subscription_ids, '{}'::int[], NULL,
        format('Your household pays for %s %s services (%s, %s/mo). %s is the least used, with %s session%s in the last 30 days.',
               services_in_category, category_name, human_list(services), inr(category_cost),
               least_used_service, least_used_sessions, CASE WHEN least_used_sessions = 1 THEN '' ELSE 's' END),
-       savings
+       savings,
+       NULL::jsonb
 FROM v_category_overlap;
+
+-- ---------------------------------------------------------------------------
+-- v_alert_reasons — the reason path behind each subscription in a finding,
+-- as text, with the members it covers (FR-38): the members of the subject
+-- subscription, who all keep the service through that path
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE VIEW v_alert_reasons AS
+SELECT x.alert_id, a.household_id, a.alert_type, a.fingerprint, a.status,
+       x.subscription_id, x.role, x.reason_path,
+       path_label(x.reason_path) AS reason_label,
+       (SELECT array_agg(sm.user_id ORDER BY sm.user_id)
+          FROM subscription_members sm WHERE sm.subscription_id = x.subscription_id) AS member_ids,
+       (SELECT array_agg(u.full_name ORDER BY u.full_name)
+          FROM subscription_members sm JOIN users u ON u.user_id = sm.user_id
+         WHERE sm.subscription_id = x.subscription_id) AS member_names
+FROM alert_subscriptions x
+JOIN alerts a ON a.alert_id = x.alert_id;
 
 -- ---------------------------------------------------------------------------
 -- lock_household — every transaction that changes a household's data takes
@@ -887,13 +927,16 @@ BEGIN
       AND a.status = 'open'
       AND (p_household_id IS NULL OR a.household_id = p_household_id);
 
-    INSERT INTO alert_subscriptions (alert_id, subscription_id, role)
-    SELECT a.alert_id, sid, 'subject'
+    INSERT INTO alert_subscriptions (alert_id, subscription_id, role, reason_path)
+    SELECT a.alert_id, x.sid, 'subject',
+           CASE WHEN jsonb_typeof(f.subject_paths -> (x.ord::int - 1)) = 'array'
+                THEN ARRAY(SELECT jsonb_array_elements_text(f.subject_paths -> (x.ord::int - 1))::int)
+           END
     FROM _findings f
     JOIN alerts a ON a.household_id = f.household_id AND a.fingerprint = f.fingerprint AND a.status = 'open'
-    CROSS JOIN LATERAL UNNEST(f.subject_ids) AS sid
+    CROSS JOIN LATERAL UNNEST(f.subject_ids) WITH ORDINALITY AS x(sid, ord)
     UNION
-    SELECT a.alert_id, sid, 'source'
+    SELECT a.alert_id, sid, 'source', NULL
     FROM _findings f
     JOIN alerts a ON a.household_id = f.household_id AND a.fingerprint = f.fingerprint AND a.status = 'open'
     CROSS JOIN LATERAL UNNEST(f.source_ids) AS sid

@@ -264,12 +264,19 @@ CREATE INDEX idx_alerts_household_status ON alerts(household_id, status);
 
 -- which subscriptions an alert is about. role 'subject' = the subscription the
 -- advice is about (cancel/merge/switch this one); 'source' = the subscription
--- that explains it (e.g. the telecom plan that already includes the service)
+-- that explains it (e.g. the telecom plan that already includes the service).
+-- reason_path (FR-38) is the chain of plan ids that makes a subject
+-- replaceable, e.g. Airtel Family → Amazon Prime (included) → Prime Video
+-- (included). It lives here, not on alerts, because one finding can have a
+-- different path per subscription (a bundle replaces each one through its
+-- own included plan). NULL for usage-based findings, which have no path.
 CREATE TABLE alert_subscriptions (
     alert_id         INT NOT NULL REFERENCES alerts(alert_id) ON DELETE CASCADE,
     subscription_id  INT NOT NULL REFERENCES subscriptions(subscription_id) ON DELETE CASCADE,
     role             VARCHAR(10) NOT NULL CHECK (role IN ('subject','source')),
-    PRIMARY KEY (alert_id, subscription_id)
+    reason_path      INT[],
+    PRIMARY KEY (alert_id, subscription_id),
+    CHECK (reason_path IS NULL OR (role = 'subject' AND cardinality(reason_path) >= 1))
 );
 CREATE INDEX idx_alert_subscriptions_sub ON alert_subscriptions(subscription_id);
 
