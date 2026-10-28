@@ -13,6 +13,8 @@
 //   4. optimizer steps: a downgrade is Medium; with the silence, the cancel
 //      that rests on missing usage is Low and left out of the counted saving
 //   5. constraints, the household lock and jit = off on the new routines
+//   6. benchmark mode (FR-42): v2 never saves less than v1 on generated
+//      households, and leaves the database unchanged
 'use strict';
 
 const path = require('path');
@@ -37,6 +39,7 @@ if (!process.argv.includes('--no-rebuild')) {
 const { pool } = require(path.join(ROOT, 'server/db'));
 const { optimize } = require(path.join(ROOT, 'server/optimizer'));
 const { createRun, readRun } = require(path.join(ROOT, 'server/routes/optimizer'));
+const { benchmark } = require(path.join(ROOT, 'db/tests/benchmark'));
 
 const HARD = ['hidden_duplicate', 'consolidation', 'spare_capacity', 'bundle', 'waste'];
 const USAGE_BASED = ['waste', 'churn_risk', 'overlap'];
@@ -207,6 +210,20 @@ async function main() {
         `SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
          WHERE n.nspname = 'public' AND p.proname = ANY ($1) AND 'jit=off' = ANY (p.proconfig)`, [NEW_ROUTINES]);
     check(jit.length === NEW_ROUTINES.length, `all ${NEW_ROUTINES.length} v2 functions and procedures run with jit = off`);
+
+    // ------------------------------------------------------------ 6. benchmark (FR-42)
+    const count = async () => (await pool.query(
+        `SELECT (SELECT COUNT(*) FROM households) || '/' || (SELECT COUNT(*) FROM users) || '/'
+                || (SELECT COUNT(*) FROM subscriptions) || '/' || (SELECT COUNT(*) FROM usage_logs) AS n`)).rows[0].n;
+    const before = await count();
+    const rows = await benchmark({ sizes: [[5, 10], [8, 15]], households: 4, seed: 7 }, () => {});
+    check(rows.length === 8, 'benchmark: generated 8 synthetic households (5x10 and 8x15)');
+    check(rows.every((r) => r.v2_no_threshold >= r.v1_saving - 0.005),
+          'benchmark: v2 saves at least as much as v1 on every one ('
+          + rows.map((r) => `₹${r.v2_no_threshold} vs ₹${r.v1_saving}`).join(', ') + ')');
+    check(rows.filter((r) => r.size === '5x10').every((r) => r.optimal && r.v2_ms < 2000),
+          'benchmark: 5-member households are solved exactly, well under 2 s');
+    check((await count()) === before, 'benchmark: the database is unchanged afterwards (rolled back)');
 
     console.log(`v2d checks: all ${passed} passed`);
 }
