@@ -152,4 +152,5 @@ for (const [action, commit] of [['preview', false], ['apply', true]]) {
     });
 }
 
-module.exports = router;
+// the helpers are exported too, for db/tests/v2b_check.js
+module.exports = Object.assign(router, { createRun, readRun, runOptimization });
