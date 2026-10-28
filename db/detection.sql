@@ -1077,6 +1077,123 @@ END;
 $$;
 
 -- ============================================================================
+-- Household optimizer (FR-29 to FR-33): data in, steps out
+-- ============================================================================
+
+-- ---------------------------------------------------------------------------
+-- optimizer_input — everything the optimizer (server/optimizer.js) needs for
+-- one household, as one JSON document. Prices and inclusions are those valid
+-- on p_date; needs, subscriptions and findings are as they are now.
+--   users          the household's members
+--   services       id, name, whether the category is passive
+--   needs          every need in force, with covered_today (v_need_coverage)
+--   subscriptions  active ones, with their members
+--   plans          plans already held, plus every priced plan that reaches a
+--                  needed service, each with the services it covers (shortest
+--                  path to each, depth 0 = its own service)
+--   alerts         open v1 findings, so the run can say which it adopts
+-- Every array is ordered, so the same data always gives the same document
+-- (and the same optimizer_state_hash).
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION optimizer_input(p_household_id INT, p_date DATE DEFAULT CURRENT_DATE)
+RETURNS JSONB
+LANGUAGE sql STABLE
+SET jit = off
+AS $$
+    WITH members AS (
+        SELECT hm.user_id, u.full_name
+        FROM household_members hm JOIN users u ON u.user_id = hm.user_id
+        WHERE hm.household_id = p_household_id
+    ),
+    subs AS (
+        SELECT s.subscription_id, s.payer_id, s.plan_id,
+               (SELECT array_agg(sm.user_id ORDER BY sm.user_id)
+                  FROM subscription_members sm WHERE sm.subscription_id = s.subscription_id) AS member_ids
+        FROM subscriptions s
+        JOIN members m ON m.user_id = s.payer_id
+        WHERE s.status = 'active'
+    ),
+    needs AS (
+        SELECT n.user_id, n.service_id, n.source, COALESCE(nc.covered, false) AS covered_today
+        FROM member_needs n
+        JOIN members m ON m.user_id = n.user_id
+        LEFT JOIN v_need_coverage nc ON nc.user_id = n.user_id AND nc.service_id = n.service_id
+        WHERE n.is_needed
+    ),
+    coverage AS (
+        SELECT DISTINCT ON (plan_id, service_id) plan_id, service_id, depth, path
+        FROM (SELECT p.plan_id, p.service_id, 0 AS depth, ARRAY[p.plan_id] AS path
+                FROM plan_catalog p WHERE p.is_purchasable
+              UNION ALL
+              SELECT root_plan_id, included_service_id, depth, path
+                FROM entitlement_closure_at(p_date)) c
+        ORDER BY plan_id, service_id, depth, path
+    ),
+    relevant_plans AS (
+        SELECT plan_id FROM subs
+        UNION
+        SELECT c.plan_id
+        FROM coverage c
+        JOIN plans_at(p_date) p ON p.plan_id = c.plan_id
+        WHERE p.price IS NOT NULL
+          AND c.service_id IN (SELECT service_id FROM needs)
+    )
+    SELECT jsonb_build_object(
+        'household_id', p_household_id,
+        'evaluated_on', p_date,
+        'users', (SELECT COALESCE(jsonb_agg(jsonb_build_object('user_id', user_id, 'name', full_name)
+                                            ORDER BY user_id), '[]')
+                    FROM members),
+        'services', (SELECT jsonb_agg(jsonb_build_object('service_id', sv.service_id, 'name', sv.name,
+                                                         'is_passive', c.is_passive)
+                                      ORDER BY sv.service_id)
+                       FROM services sv JOIN categories c ON c.category_id = sv.category_id),
+        'needs', (SELECT COALESCE(jsonb_agg(jsonb_build_object('user_id', user_id, 'service_id', service_id,
+                                                               'source', source, 'covered_today', covered_today)
+                                            ORDER BY user_id, service_id), '[]')
+                    FROM needs),
+        'subscriptions', (SELECT COALESCE(jsonb_agg(jsonb_build_object('subscription_id', subscription_id,
+                                                                       'payer_id', payer_id, 'plan_id', plan_id,
+                                                                       'member_ids', member_ids)
+                                                    ORDER BY subscription_id), '[]')
+                            FROM subs),
+        'plans', (SELECT COALESCE(jsonb_agg(jsonb_build_object(
+                                     'plan_id', p.plan_id, 'service_id', p.service_id, 'name', p.name,
+                                     'tier', p.tier, 'max_members', p.max_members,
+                                     'is_purchasable', p.is_purchasable, 'monthly_price', p.monthly_price,
+                                     'covers', (SELECT jsonb_agg(jsonb_build_object('service_id', c.service_id,
+                                                                                    'depth', c.depth, 'path', c.path)
+                                                                 ORDER BY c.service_id)
+                                                  FROM coverage c WHERE c.plan_id = p.plan_id))
+                                  ORDER BY p.plan_id), '[]')
+                    FROM plans_at(p_date) p
+                    WHERE p.plan_id IN (SELECT plan_id FROM relevant_plans)),
+        'alerts', (SELECT COALESCE(jsonb_agg(jsonb_build_object(
+                                      'alert_id', a.alert_id, 'alert_type', a.alert_type,
+                                      'recommended_plan_id', a.recommended_plan_id,
+                                      'savings', a.potential_monthly_savings,
+                                      'subject_ids', COALESCE((SELECT array_agg(x.subscription_id ORDER BY x.subscription_id)
+                                                                 FROM alert_subscriptions x
+                                                                WHERE x.alert_id = a.alert_id AND x.role = 'subject'), '{}'),
+                                      'source_ids', COALESCE((SELECT array_agg(x.subscription_id ORDER BY x.subscription_id)
+                                                                FROM alert_subscriptions x
+                                                               WHERE x.alert_id = a.alert_id AND x.role = 'source'), '{}'))
+                                   ORDER BY a.alert_id), '[]')
+                     FROM alerts a
+                     WHERE a.household_id = p_household_id AND a.status = 'open')
+    )
+$$;
+
+-- fingerprint of the data a run was computed from (see optimization_runs)
+CREATE OR REPLACE FUNCTION optimizer_state_hash(p_household_id INT, p_date DATE DEFAULT CURRENT_DATE)
+RETURNS TEXT
+LANGUAGE sql STABLE
+SET jit = off
+AS $$
+    SELECT md5(optimizer_input(p_household_id, p_date)::text)
+$$;
+
+-- ============================================================================
 -- Bank statement import — find recurring charges in raw transactions
 -- ============================================================================
 

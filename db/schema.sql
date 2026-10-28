@@ -281,6 +281,70 @@ CREATE TABLE alert_subscriptions (
 CREATE INDEX idx_alert_subscriptions_sub ON alert_subscriptions(subscription_id);
 
 -- ---------------------------------------------------------------------------
+-- household optimizer (FR-29 to FR-33). One row per run of the optimizer,
+-- its steps in order, and what it decided about each open v1 finding.
+-- state_hash is a fingerprint of the data the run was computed from; a run
+-- can only be applied while the household still matches it.
+-- ---------------------------------------------------------------------------
+CREATE TABLE optimization_runs (
+    run_id         SERIAL PRIMARY KEY,
+    household_id   INT NOT NULL REFERENCES households(household_id) ON DELETE CASCADE,
+    kind           VARCHAR(10) NOT NULL DEFAULT 'optimize' CHECK (kind IN ('optimize','what_if')),
+    scenario_name  VARCHAR(100),
+    evaluated_on   DATE NOT NULL DEFAULT CURRENT_DATE,
+    cost_before    NUMERIC(10,2) NOT NULL CHECK (cost_before >= 0),
+    cost_after     NUMERIC(10,2) NOT NULL CHECK (cost_after >= 0),
+    is_optimal     BOOLEAN NOT NULL,       -- false: the time cap hit, best answer found so far
+    elapsed_ms     INT NOT NULL CHECK (elapsed_ms >= 0),
+    state_hash     TEXT NOT NULL,
+    status         VARCHAR(10) NOT NULL DEFAULT 'proposed' CHECK (status IN ('proposed','applied','stale')),
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    applied_at     TIMESTAMPTZ,
+    CHECK ((status = 'applied') = (applied_at IS NOT NULL)),
+    CHECK (kind = 'what_if' OR scenario_name IS NULL)
+);
+CREATE INDEX idx_optimization_runs_household ON optimization_runs(household_id, created_at);
+
+-- start      new subscription (plan_id, payer_id, user_ids = everyone on it)
+-- switch     replace subscription_id with a new plan_id for the same payer
+-- add_member put user_ids[1] on an existing subscription with a free spot
+-- cancel     cancel subscription_id
+-- saving is what the step changes the monthly bill by (negative for a start)
+CREATE TABLE optimization_steps (
+    run_id           INT NOT NULL REFERENCES optimization_runs(run_id) ON DELETE CASCADE,
+    step_no          INT NOT NULL CHECK (step_no >= 1),
+    action           VARCHAR(10) NOT NULL CHECK (action IN ('start','switch','add_member','cancel')),
+    subscription_id  INT REFERENCES subscriptions(subscription_id) ON DELETE CASCADE,
+    plan_id          INT REFERENCES plan_catalog(plan_id),
+    payer_id         INT REFERENCES users(user_id) ON DELETE CASCADE,
+    user_ids         INT[] NOT NULL DEFAULT '{}',
+    saving           NUMERIC(10,2) NOT NULL,
+    description      TEXT NOT NULL,
+    reason           TEXT NOT NULL,
+    reason_path      INT[],
+    PRIMARY KEY (run_id, step_no),
+    CHECK (CASE action
+               WHEN 'start'      THEN subscription_id IS NULL AND plan_id IS NOT NULL AND payer_id IS NOT NULL
+               WHEN 'switch'     THEN subscription_id IS NOT NULL AND plan_id IS NOT NULL AND payer_id IS NOT NULL
+               WHEN 'add_member' THEN subscription_id IS NOT NULL AND cardinality(user_ids) = 1
+               WHEN 'cancel'     THEN subscription_id IS NOT NULL AND plan_id IS NULL
+           END)
+);
+
+-- FR-32: each open v1 finding, as the run saw it
+--   adopted     the run does what the finding says
+--   superseded  the run replaces the same subscriptions in a different way
+--   rejected    the run keeps the finding's subscriptions
+CREATE TABLE optimization_alert_outcomes (
+    run_id        INT NOT NULL REFERENCES optimization_runs(run_id) ON DELETE CASCADE,
+    alert_id      INT NOT NULL REFERENCES alerts(alert_id) ON DELETE CASCADE,
+    outcome       VARCHAR(10) NOT NULL CHECK (outcome IN ('adopted','superseded','rejected')),
+    alert_saving  NUMERIC(10,2),
+    note          TEXT NOT NULL,
+    PRIMARY KEY (run_id, alert_id)
+);
+
+-- ---------------------------------------------------------------------------
 -- bank statement import
 -- ---------------------------------------------------------------------------
 -- regex patterns (matched against a cleaned-up transaction description) that
@@ -370,6 +434,40 @@ $$;
 CREATE TRIGGER trg_check_plan_price
     BEFORE INSERT OR UPDATE OF plan_id, price ON plan_price_history
     FOR EACH ROW EXECUTE FUNCTION check_plan_price();
+
+-- an optimizer run's steps must add up: the savings of all its steps equal
+-- cost_before - cost_after. Checked at COMMIT (a deferred constraint
+-- trigger), because the run row is written before its steps.
+CREATE FUNCTION check_run_reconciles() RETURNS TRIGGER
+LANGUAGE plpgsql
+SET jit = off
+AS $$
+DECLARE
+    v_expected NUMERIC;
+    v_steps    NUMERIC;
+BEGIN
+    SELECT r.cost_before - r.cost_after,
+           COALESCE((SELECT SUM(s.saving) FROM optimization_steps s WHERE s.run_id = r.run_id), 0)
+      INTO v_expected, v_steps
+      FROM optimization_runs r
+     WHERE r.run_id = NEW.run_id;
+    IF FOUND AND v_steps <> v_expected THEN
+        RAISE EXCEPTION 'Optimizer run %: steps save % but the cost changes by %', NEW.run_id, v_steps, v_expected
+            USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER trg_run_reconciles
+    AFTER INSERT OR UPDATE ON optimization_runs
+    DEFERRABLE INITIALLY DEFERRED
+    FOR EACH ROW EXECUTE FUNCTION check_run_reconciles();
+
+CREATE CONSTRAINT TRIGGER trg_run_steps_reconcile
+    AFTER INSERT OR UPDATE ON optimization_steps
+    DEFERRABLE INITIALLY DEFERRED
+    FOR EACH ROW EXECUTE FUNCTION check_run_reconciles();
 
 -- the payer is always a member of their own subscription
 CREATE FUNCTION enrol_payer() RETURNS TRIGGER AS $$
