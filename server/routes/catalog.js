@@ -7,7 +7,7 @@ const router = express.Router();
 router.get('/plans', async (req, res, next) => {
     try {
         const { rows } = await pool.query(
-            `SELECT p.plan_id, p.name AS plan_name, p.tier, p.price, p.billing_cycle,
+            `SELECT p.plan_id, p.service_id, p.name AS plan_name, p.tier, p.price, p.billing_cycle,
                     p.monthly_price, p.max_members, s.name AS service_name, c.name AS category_name
              FROM plans p
              JOIN services s   ON s.service_id = p.service_id
