@@ -1092,6 +1092,8 @@ $$;
 --                  needed service, each with the services it covers (shortest
 --                  path to each, depth 0 = its own service)
 --   alerts         open v1 findings, so the run can say which it adopts
+--   inclusions     every entitlement edge valid on p_date, so a what-if can
+--                  remove one and recompute coverage (server/whatif.js)
 -- Every array is ordered, so the same data always gives the same document
 -- (and the same optimizer_state_hash).
 -- ---------------------------------------------------------------------------
@@ -1180,7 +1182,13 @@ AS $$
                                                                WHERE x.alert_id = a.alert_id AND x.role = 'source'), '{}'))
                                    ORDER BY a.alert_id), '[]')
                      FROM alerts a
-                     WHERE a.household_id = p_household_id AND a.status = 'open')
+                     WHERE a.household_id = p_household_id AND a.status = 'open'),
+        'inclusions', (SELECT COALESCE(jsonb_agg(jsonb_build_object(
+                                          'parent_plan_id', e.plan_id, 'included_plan_id', e.included_plan_id,
+                                          'included_service_id', ip.service_id)
+                                       ORDER BY e.plan_id, e.included_plan_id), '[]')
+                         FROM entitlements_at(p_date) e
+                         JOIN plan_catalog ip ON ip.plan_id = e.included_plan_id)
     )
 $$;
 
@@ -1230,6 +1238,9 @@ BEGIN
     END IF;
     PERFORM lock_household(v_hh);                      -- household lock first, then the row
     SELECT * INTO r FROM optimization_runs WHERE run_id = p_run_id FOR UPDATE;
+    IF r.kind <> 'optimize' THEN
+        RAISE EXCEPTION 'Run % is a what-if simulation and cannot be applied', p_run_id USING ERRCODE = 'check_violation';
+    END IF;
     IF r.status <> 'proposed' THEN
         RAISE EXCEPTION 'This optimizer run was already %', r.status USING ERRCODE = 'check_violation';
     END IF;

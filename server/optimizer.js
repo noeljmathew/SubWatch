@@ -62,7 +62,10 @@ function humanList(items) {
 // ---------------------------------------------------------------------------
 // model: the input turned into maps and indexes the search can use
 // ---------------------------------------------------------------------------
-function buildModel(input) {
+// opts.require: needs that must be covered even though no current plan covers
+// them (a what-if repair restoring what a change took away). One that no
+// plan in the input can cover at all is reported as unrepairable instead.
+function buildModel(input, opts = {}) {
     const users = new Map(input.users.map((u) => [u.user_id, u.name]));
     const services = new Map(input.services.map((s) => [s.service_id, { name: s.name, isPassive: s.is_passive }]));
 
@@ -107,21 +110,6 @@ function buildModel(input) {
         seen.add(key);
         needs.push({ idx: needs.length, u, s, source });
     };
-    for (const n of input.needs) {
-        if (coveredBySubs(n.user_id, n.service_id)) addNeed(n.user_id, n.service_id, n.source);
-        else uncovered.push({ user_id: n.user_id, service_id: n.service_id, source: n.source });
-    }
-    for (const sub of subs) {
-        if (!sub.passive) continue;
-        for (const m of [...sub.members].sort((a, b) => a - b)) addNeed(m, sub.plan.serviceId, 'passive_subscription');
-    }
-
-    const needsByUser = new Map();
-    for (const n of needs) {
-        if (!needsByUser.has(n.u)) needsByUser.set(n.u, []);
-        needsByUser.get(n.u).push(n);
-    }
-
     // plans that may be started new, per service they cover
     const candidatesByService = new Map();
     const candidates = [...plans.values()]
@@ -135,6 +123,33 @@ function buildModel(input) {
         }
     }
 
+    const required = new Set((opts.require || []).map((n) => n.user_id + ':' + n.service_id));
+    const unrepairable = [];
+    for (const n of input.needs) {
+        const key = n.user_id + ':' + n.service_id;
+        if (coveredBySubs(n.user_id, n.service_id)) {
+            addNeed(n.user_id, n.service_id, n.source);
+        } else if (required.has(key)) {
+            if (candidatesByService.has(n.service_id) || subs.some((s) => s.plan.covers.has(n.service_id))) {
+                addNeed(n.user_id, n.service_id, n.source);
+            } else {
+                unrepairable.push({ user_id: n.user_id, service_id: n.service_id, source: n.source });
+            }
+        } else {
+            uncovered.push({ user_id: n.user_id, service_id: n.service_id, source: n.source });
+        }
+    }
+    for (const sub of subs) {
+        if (!sub.passive) continue;
+        for (const m of [...sub.members].sort((a, b) => a - b)) addNeed(m, sub.plan.serviceId, 'passive_subscription');
+    }
+
+    const needsByUser = new Map();
+    for (const n of needs) {
+        if (!needsByUser.has(n.u)) needsByUser.set(n.u, []);
+        needsByUser.get(n.u).push(n);
+    }
+
     // no splitting: a service never ends up with more plans than it has
     // today. A service with none today (a bundle like Apple One) may get one.
     const planLimit = new Map();
@@ -142,7 +157,9 @@ function buildModel(input) {
     const limitOf = (serviceId) => Math.max(planLimit.get(serviceId) || 0, 1);
 
     const currentCost = subs.reduce((t, s) => t + s.price, 0);
-    return { input, users, services, plans, subs, needs, needsByUser, candidatesByService, uncovered, currentCost, limitOf };
+    const currentValid = needs.every((n) => coveredBySubs(n.u, n.s));
+    return { input, users, services, plans, subs, needs, needsByUser, candidatesByService, uncovered,
+             unrepairable, currentCost, currentValid, limitOf };
 }
 
 // ---------------------------------------------------------------------------
@@ -309,7 +326,9 @@ function greedy(model, pinned) {
 function search(model, pinned, deadline, opts = {}) {
     const useBound = opts.bound !== false;
     const dominance = opts.dominance !== false;
-    let best = currentConfig(model);
+    // today's configuration is the first upper bound, unless a required need
+    // (what-if repair) means it no longer covers everything
+    let best = model.currentValid ? currentConfig(model) : null;
     const g = greedy(model, pinned);
     if (g && better(g, best)) best = g;
 
@@ -338,7 +357,7 @@ function search(model, pinned, deadline, opts = {}) {
             if (better(cand, best)) best = cand;
             return;
         }
-        if (useBound && (cost + lb > best.cost || (cost + lb === best.cost && changes >= best.changes))) return;
+        if (useBound && best && (cost + lb > best.cost || (cost + lb === best.cost && changes >= best.changes))) return;
 
         for (const o of pick.opts) {
             const undo = st.apply(o, pick.n);
@@ -581,7 +600,7 @@ function optimize(input, opts = {}) {
     const minSaving = paise(opts.minSaving ?? MIN_SAVING);
     const deadline = started + (opts.timeCapMs ?? TIME_CAP_MS);
     const searchOpts = opts.exhaustive ? { bound: false, dominance: false } : {};
-    const model = buildModel(input);
+    const model = buildModel(input, opts);
 
     // MIN_SAVING: every subscription the answer drops must be worth dropping
     // on its own. Its marginal saving is what the best answer costs with that
@@ -596,6 +615,7 @@ function optimize(input, opts = {}) {
     let r = search(model, pinned, deadline, searchOpts);
     nodes += r.nodes;
     optimal = r.optimal;
+    if (!r.best) throw new Error('optimizer: no configuration covers every required need within the plan limits');
     let changed = true;
     while (changed && Date.now() <= deadline) {
         changed = false;
@@ -609,6 +629,7 @@ function optimize(input, opts = {}) {
                 alt = search(model, new Set([...pinned, d.id]), deadline, searchOpts);
                 nodes += alt.nodes;
                 optimal = optimal && alt.optimal;
+                if (!alt.best) continue;           // keeping it leaves no valid configuration
                 marginal = alt.best.cost - r.best.cost;
             }
             if (marginal < minSaving) {
@@ -640,6 +661,11 @@ function optimize(input, opts = {}) {
         steps: steps.map((s) => ({ ...s, saving: rupees(s.saving) })),
         outcomes: alertOutcomes(model, result.config, steps),
         uncovered_needs: model.uncovered,
+        unrepairable_needs: model.unrepairable,
+        // every need in the input that the final configuration leaves uncovered
+        final_uncovered: input.needs
+            .filter((n) => !coveringInstance(result.config, n.user_id, n.service_id))
+            .map((n) => ({ user_id: n.user_id, service_id: n.service_id, source: n.source })),
     };
 }
 
