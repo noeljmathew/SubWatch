@@ -8,48 +8,69 @@
 <style>
   :root {
     color-scheme: light;
-    --page: #f9f9f7;
-    --surface: #fcfcfb;
-    --surface-2: #ffffff;
-    --ink: #0b0b0b;
-    --ink-2: #52514e;
-    --muted: #898781;
-    --grid: #e1e0d9;
-    --border: rgba(11,11,11,0.10);
-    --accent: #2a78d6;
+    --page: #eef1ec;
+    --surface: #ffffff;
+    --surface-2: #f5f7f3;
+    --ink: #15231d;
+    --ink-2: #4a5852;
+    --muted: #7c8983;
+    --grid: #e1e6df;
+    --border: rgba(21,35,29,0.08);
+    --accent: #2f6b57;
     --accent-ink: #ffffff;
-    --good-text: #006300;
-    --bad-text: #b3261e;
+    --accent-soft: #e2eee7;
+    --warm: #c46d4b;
+    --warm-soft: #f7e7df;
+    --amber: #a5781f;
+    --amber-soft: #f6edd8;
+    --hero: #24473b;
+    --hero-2: #2e5a4b;
+    --hero-ink: #f2f7f4;
+    --hero-muted: #b8cdc4;
+    --good-text: #2f6b57;
+    --bad-text: #b4502f;
+    --shadow: 0 1px 2px rgba(21,35,29,.04), 0 8px 24px -16px rgba(21,35,29,.22);
     /* categorical identity for finding types */
-    --c-dup: #4a3aa7;
-    --c-consolidation: #2a78d6;
-    --c-spare: #1baf7a;
-    --c-bundle: #008300;
-    --c-churn: #eda100;
-    --c-waste: #e34948;
-    --c-overlap: #e87ba4;
+    --c-dup: #6a5bb5;
+    --c-consolidation: #2f6b57;
+    --c-spare: #3f9a82;
+    --c-bundle: #5f7f37;
+    --c-churn: #c9952e;
+    --c-waste: #c46d4b;
+    --c-overlap: #b9668a;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
       color-scheme: dark;
-      --page: #0d0d0d;
-      --surface: #1a1a19;
-      --surface-2: #222221;
-      --ink: #ffffff;
-      --ink-2: #c3c2b7;
-      --muted: #898781;
-      --grid: #2c2c2a;
-      --border: rgba(255,255,255,0.10);
-      --accent: #3987e5;
-      --good-text: #0ca30c;
-      --bad-text: #e66767;
-      --c-dup: #9085e9;
-      --c-consolidation: #3987e5;
-      --c-spare: #199e70;
-      --c-bundle: #008300;
-      --c-churn: #c98500;
-      --c-waste: #e66767;
-      --c-overlap: #d55181;
+      --page: #0e1311;
+      --surface: #151c19;
+      --surface-2: #1b2420;
+      --ink: #e7eee9;
+      --ink-2: #b2bfb8;
+      --muted: #7f8c86;
+      --grid: #26312c;
+      --border: rgba(255,255,255,0.07);
+      --accent: #6bbf9c;
+      --accent-ink: #0e1311;
+      --accent-soft: #1c3329;
+      --warm: #e2906d;
+      --warm-soft: #3a261d;
+      --amber: #d8ad55;
+      --amber-soft: #33291a;
+      --hero: #1c3a30;
+      --hero-2: #26493d;
+      --hero-ink: #eef6f1;
+      --hero-muted: #9fbcb0;
+      --good-text: #6bbf9c;
+      --bad-text: #e8876a;
+      --shadow: none;
+      --c-dup: #9a8fe6;
+      --c-consolidation: #6bbf9c;
+      --c-spare: #54b59a;
+      --c-bundle: #93b562;
+      --c-churn: #d8ad55;
+      --c-waste: #e2906d;
+      --c-overlap: #d98bab;
     }
   }
   * { box-sizing: border-box; }
@@ -57,78 +78,194 @@
     margin: 0;
     background: var(--page);
     color: var(--ink);
-    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     font-size: 14px;
+    line-height: 1.4;
   }
   button, select, input {
     font: inherit;
     font-size: 13px;
     color: var(--ink);
-    background: var(--surface-2);
+    background: var(--surface);
     border: 1px solid var(--grid);
-    border-radius: 8px;
-    padding: 7px 11px;
+    border-radius: 10px;
+    padding: 8px 12px;
   }
-  button { cursor: pointer; }
+  select, input { min-width: 0; }
+  input:focus, select:focus, button:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent); outline-offset: 1px; }
+  button { cursor: pointer; font-weight: 500; }
   button:hover { border-color: var(--muted); }
   button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
-  button.small { padding: 4px 9px; font-size: 12px; }
+  button.primary:hover { filter: brightness(1.06); }
+  button.warm { background: var(--warm); border-color: var(--warm); color: #fff; font-weight: 600; }
+  button.small { padding: 5px 10px; font-size: 12px; border-radius: 8px; }
   button.link { border: none; background: none; padding: 0; color: var(--ink-2); text-decoration: underline; font-size: 12px; }
+  button.link.accent { color: var(--accent); font-weight: 600; text-decoration: none; }
   button:disabled { opacity: .5; cursor: default; }
 
+  /* shell */
   header {
-    display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
-    padding: 16px 28px;
-    background: var(--surface);
-    border-bottom: 1px solid var(--grid);
+    display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+    max-width: 1280px; margin: 0 auto; padding: 26px 28px 6px;
   }
-  header h1 { margin: 0; font-size: 18px; }
-  header .tag { font-size: 12px; color: var(--muted); margin-top: 2px; }
-  header .controls { display: flex; gap: 8px; align-items: center; }
+  .brand { display: flex; gap: 14px; align-items: center; }
+  .mark {
+    width: 42px; height: 42px; border-radius: 12px; background: var(--accent); color: var(--accent-ink);
+    display: inline-flex; align-items: center; justify-content: center; font-weight: 800; font-size: 18px;
+  }
+  .eyebrow { font-size: 11px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; color: var(--muted); }
+  header h1 { margin: 2px 0 0; font-size: 26px; letter-spacing: -.01em; }
+  header .tag { font-size: 13px; color: var(--ink-2); margin-top: 3px; }
+  header .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
   main {
-    max-width: 1240px; margin: 0 auto; padding: 22px 28px 60px;
-    display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 20px;
+    max-width: 1280px; margin: 0 auto; padding: 18px 28px 60px;
+    display: grid; grid-template-columns: minmax(0, 1fr) 390px; gap: 20px;
   }
   .stack { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
-  .card { background: var(--surface); border: 1px solid var(--grid); border-radius: 12px; padding: 18px 20px; }
-  .card h2 { margin: 0 0 4px; font-size: 14px; }
-  .card .sub { margin: 0 0 14px; font-size: 12px; color: var(--muted); }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 18px; padding: 20px 22px; box-shadow: var(--shadow); }
+  .card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+  .card h2 { margin: 0 0 3px; font-size: 18px; letter-spacing: -.005em; }
+  .card h3 { margin: 16px 0 8px; font-size: 12px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
+  .card .sub { margin: 0 0 16px; font-size: 13px; color: var(--muted); }
 
-  .tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
-  .tile { background: var(--surface); border: 1px solid var(--grid); border-radius: 12px; padding: 15px 16px; }
-  .tile .label { font-size: 12px; color: var(--ink-2); }
-  .tile .value { font-size: 24px; font-weight: 700; margin: 4px 0 3px; }
-  .tile .hint { font-size: 11px; color: var(--muted); }
-  .meter { height: 6px; border-radius: 3px; background: var(--grid); overflow: hidden; margin-top: 7px; }
+  .tiles { display: grid; grid-template-columns: 1.3fr repeat(3, minmax(0, 1fr)); gap: 14px; }
+  .tile { background: var(--surface); border: 1px solid var(--border); border-radius: 18px; padding: 16px 18px; box-shadow: var(--shadow); min-width: 0; }
+  .tile .label { font-size: 13px; color: var(--ink-2); }
+  .tile .value { font-size: 28px; font-weight: 700; margin: 6px 0 4px; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+  .tile .hint { font-size: 12px; color: var(--muted); }
+  .tile.hero { background: linear-gradient(140deg, var(--hero), var(--hero-2)); color: var(--hero-ink); border-color: transparent; }
+  .tile.hero .label, .tile.hero .hint { color: var(--hero-muted); }
+  .tile.hero .value { font-size: 32px; }
+  .spend-on { display: flex; gap: 8px; align-items: center; margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,.14); flex-wrap: wrap; }
+  .spend-on input { background: rgba(255,255,255,.1); border-color: rgba(255,255,255,.2); color: var(--hero-ink); padding: 4px 8px; font-size: 12px; color-scheme: dark; }
+  .spend-on .eyebrow { color: var(--hero-muted); }
+  .spend-on .at { font-size: 12px; color: var(--hero-ink); font-variant-numeric: tabular-nums; }
+  .meter { height: 6px; border-radius: 3px; background: var(--grid); overflow: hidden; margin-top: 9px; }
   .meter > div { height: 100%; border-radius: 3px; background: var(--accent); }
+
+  /* badges and pills */
+  .badge { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+  .badge i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; display: inline-block; }
+  .conf-High { background: var(--accent-soft); color: var(--good-text); }
+  .conf-Medium { background: var(--amber-soft); color: var(--amber); }
+  .conf-Low { background: var(--surface-2); color: var(--muted); border: 1px solid var(--grid); }
+  .src-usage { background: var(--accent-soft); color: var(--good-text); }
+  .src-passive { background: var(--surface-2); color: var(--ink-2); border: 1px solid var(--grid); }
+  .src-manual { background: var(--warm-soft); color: var(--warm); }
+  .out-adopted { background: var(--accent-soft); color: var(--good-text); }
+  .out-superseded { background: var(--amber-soft); color: var(--amber); }
+  .out-rejected { background: var(--surface-2); color: var(--muted); border: 1px solid var(--grid); }
+  .act-badge { font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; padding: 2px 7px; border-radius: 6px; background: var(--surface-2); color: var(--ink-2); border: 1px solid var(--grid); }
+  .act-cancel { color: var(--warm); }
+  .act-start, .act-switch { color: var(--good-text); }
+
+  /* reason path chips */
+  .reasons { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .pathchip { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px; font-size: 12px; padding: 3px 10px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--grid); color: var(--ink-2); }
+  .pathchip .arr { color: var(--muted); }
+  .pathchip .end { color: var(--ink); font-weight: 600; }
+  .pathchip .who { color: var(--muted); }
 
   /* findings */
   .tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
-  .tabs button { padding: 5px 10px; font-size: 12px; border-radius: 999px; }
-  .tabs button.on { background: var(--ink); color: var(--surface); border-color: var(--ink); }
-  .tabs .count { color: var(--muted); margin-left: 3px; }
-  .tabs button.on .count { color: inherit; opacity: .7; }
-  .finding { display: grid; grid-template-columns: 4px minmax(0, 1fr) auto; gap: 12px; padding: 12px 0; border-top: 1px solid var(--grid); }
+  .tabs button { padding: 5px 11px; font-size: 12px; border-radius: 999px; background: var(--surface-2); border-color: transparent; }
+  .tabs button.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .tabs .count { color: var(--muted); margin-left: 4px; }
+  .tabs button.on .count { color: inherit; opacity: .75; }
+  .finding { display: grid; grid-template-columns: 4px minmax(0, 1fr) auto; gap: 14px; padding: 14px 0; border-top: 1px solid var(--grid); }
   .finding:first-child { border-top: none; padding-top: 0; }
   .finding .rail { border-radius: 2px; }
-  .finding .kind { font-size: 11px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; color: var(--ink-2); margin-bottom: 3px; }
-  .finding .msg { line-height: 1.45; }
+  .finding .kind { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-2); margin-bottom: 4px; }
+  .finding .msg { line-height: 1.5; }
   .finding .side { text-align: right; white-space: nowrap; }
-  .finding .save { font-weight: 700; color: var(--good-text); }
+  .finding .save { font-weight: 700; color: var(--good-text); font-variant-numeric: tabular-nums; }
   .finding .save.soft { color: var(--ink-2); font-weight: 600; }
   .finding .per { font-size: 11px; color: var(--muted); }
-  .finding .acts { margin-top: 8px; display: flex; gap: 10px; justify-content: flex-end; }
+  .finding .acts { margin-top: 8px; display: flex; gap: 10px; justify-content: flex-end; align-items: center; }
+  .finding.muted .msg, .finding.muted .kind, .finding.muted .save { color: var(--muted); }
+  .finding.muted .rail { opacity: .35; }
+  .evidence { margin: 10px 0 0; padding: 10px 12px; list-style: none; background: var(--surface-2); border-radius: 12px; border: 1px solid var(--grid); }
+  .evidence li { display: grid; grid-template-columns: 70px minmax(0, 1fr) 34px; gap: 10px; font-size: 12px; padding: 4px 0; align-items: baseline; }
+  .evidence .etype { font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+  .evidence .w { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--ink-2); }
+  .evidence .w.neg { color: var(--bad-text); }
+  .group-head { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; margin: 18px 0 4px; padding-top: 14px; border-top: 1px dashed var(--grid); flex-wrap: wrap; }
   .empty { color: var(--muted); font-size: 13px; padding: 6px 0; }
   .finding .acts button.small { text-decoration: none; }
-  .preview { grid-column: 2 / -1; border: 1px solid var(--grid); border-radius: 10px; padding: 12px 14px; background: var(--surface-2); }
-  .preview .pv-title { font-size: 11px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; color: var(--ink-2); margin-bottom: 6px; }
+  .preview { grid-column: 2 / -1; border: 1px solid var(--grid); border-radius: 14px; padding: 14px 16px; background: var(--surface-2); }
+  .preview .pv-title { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-2); margin-bottom: 6px; }
   .preview ol { margin: 0 0 10px; padding-left: 20px; line-height: 1.6; }
   .preview .pv-nums { display: flex; gap: 18px; flex-wrap: wrap; font-size: 13px; margin-bottom: 8px; }
   .preview .pv-nums b { font-variant-numeric: tabular-nums; }
   .preview .pv-new { font-size: 12px; color: var(--ink-2); margin-bottom: 8px; }
   .preview .pv-acts { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .preview .hint { margin-left: auto; }
+
+  /* optimizer and what-if */
+  .figures { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin: 4px 0 14px; }
+  .fig { background: var(--surface-2); border: 1px solid var(--grid); border-radius: 14px; padding: 11px 13px; min-width: 0; }
+  .fig .k { font-size: 12px; color: var(--muted); }
+  .fig .v { font-size: 19px; font-weight: 700; margin-top: 3px; font-variant-numeric: tabular-nums; }
+  .fig .d { font-size: 12px; color: var(--ink-2); margin-top: 2px; }
+  .fig.accent { background: var(--accent-soft); border-color: transparent; }
+  .fig.accent .v { color: var(--good-text); }
+  .steps { width: 100%; border-collapse: collapse; }
+  .steps td { padding: 10px 8px; vertical-align: top; }
+  .steps .no { color: var(--muted); font-variant-numeric: tabular-nums; width: 26px; }
+  .steps .what { font-weight: 600; }
+  .steps .why { font-size: 12px; color: var(--ink-2); margin-top: 3px; }
+  .steps .meta { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
+  .steps .amt { text-align: right; white-space: nowrap; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .steps .amt.pos { color: var(--good-text); }
+  .steps .amt.neg { color: var(--ink-2); }
+  .steps tr.low td { opacity: .6; }
+  .bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 14px; }
+  .bar .hint { margin-left: auto; }
+  .notice { border-radius: 14px; padding: 12px 14px; font-size: 13px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 10px 0; }
+  .notice.warn { background: var(--warm-soft); color: var(--warm); }
+  .notice.ok { background: var(--accent-soft); color: var(--good-text); }
+  .notice.info { background: var(--surface-2); color: var(--ink-2); border: 1px solid var(--grid); }
+  .outcomes { display: flex; flex-direction: column; gap: 6px; }
+  .outcome { display: grid; grid-template-columns: 96px minmax(0, 1fr) auto; gap: 10px; align-items: baseline; font-size: 12px; }
+  .outcome .t { color: var(--ink-2); }
+  .outcome .s { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .scroll { overflow-x: auto; }
+  details.fold summary { cursor: pointer; font-size: 12px; color: var(--ink-2); margin-top: 12px; }
+
+  .wi-form { display: grid; grid-template-columns: 270px minmax(0, 1fr); gap: 12px; align-items: end; }
+  .wi-form label, .field label { display: block; font-size: 12px; color: var(--ink-2); margin-bottom: 5px; }
+  .wi-fields { display: flex; gap: 10px; flex-wrap: wrap; align-items: end; }
+  .wi-fields .field { flex: 1 1 180px; min-width: 0; }
+  .wi-fields select, .wi-fields input, .wi-form select { width: 100%; }
+  .wi-save { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+  .wi-save input { flex: 1 1 200px; }
+  .affected { display: flex; flex-wrap: wrap; gap: 8px; }
+  .aff { border: 1px solid var(--grid); background: var(--surface-2); border-radius: 12px; padding: 7px 11px; font-size: 12px; }
+  .aff b { display: block; font-size: 13px; }
+  .lost-table td, .cmp td, .cmp th { font-size: 13px; }
+  .scen { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 9px 0; border-top: 1px solid var(--grid); }
+  .scen:first-child { border-top: none; }
+  .scen .n { font-weight: 600; }
+  .scen .ty { font-size: 12px; color: var(--muted); }
+  .scen .b { display: flex; gap: 6px; }
+  .cmp th { text-align: left; }
+  .cmp td.win { color: var(--good-text); font-weight: 700; }
+
+  /* needs */
+  .needs-member { padding: 12px 0; border-top: 1px solid var(--grid); }
+  .needs-member:first-child { border-top: none; padding-top: 0; }
+  .needs-member .who { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+  .needs-member .who b { font-size: 14px; }
+  .need { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 5px 0; font-size: 13px; }
+  .need .svc-line { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .need .cov { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .need .cov.no { color: var(--bad-text); font-weight: 600; }
+  .need.off .svc-line > span:first-child { text-decoration: line-through; color: var(--muted); }
+  .need .nb { display: flex; gap: 8px; align-items: center; }
+  .need-add { display: flex; gap: 6px; margin-top: 6px; }
+  .need-add select { flex: 1; min-width: 0; padding: 5px 8px; font-size: 12px; }
+
   .import-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
   .import-row input[type=file] { max-width: 230px; }
   .import-row a { font-size: 12px; color: var(--ink-2); }
@@ -144,21 +281,17 @@
   .imp-item .status .ok { color: var(--good-text); font-weight: 600; }
   .imp-item .status .meh { color: var(--muted); }
   .imp-item .status .new { color: var(--ink); font-weight: 600; }
-  @media (max-width: 640px) {
-    .imp-item { grid-template-columns: 1fr; }
-    .preview .hint { margin-left: 0; }
-    .finding { grid-template-columns: 4px minmax(0, 1fr); }
-    .finding .side { grid-column: 2; text-align: left; display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
-    .finding .acts { justify-content: flex-start; margin-top: 0; margin-left: auto; }
-  }
 
-  /* subscriptions */
+  /* subscriptions and tables */
   table { width: 100%; border-collapse: collapse; }
-  th { text-align: left; font-size: 11px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase; color: var(--muted); padding: 0 8px 8px; }
-  td { padding: 10px 8px; border-top: 1px solid var(--grid); vertical-align: middle; font-size: 13px; }
+  th { text-align: left; font-size: 11px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); padding: 9px 8px; background: var(--surface-2); }
+  th:first-child { border-radius: 10px 0 0 10px; }
+  th:last-child { border-radius: 0 10px 10px 0; }
+  td { padding: 11px 8px; border-top: 1px solid var(--grid); vertical-align: middle; font-size: 13px; }
+  tbody tr:first-child td { border-top: none; }
   td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
   tr.row { cursor: pointer; }
-  tr.row:hover td { background: color-mix(in srgb, var(--grid) 35%, transparent); }
+  tr.row:hover td { background: color-mix(in srgb, var(--accent-soft) 50%, transparent); }
   tr.inactive td { color: var(--muted); }
   .svc { font-weight: 600; }
   .plan { font-size: 12px; color: var(--muted); }
@@ -169,85 +302,101 @@
     border: 2px solid var(--surface); margin-left: -3px; box-shadow: 0 0 0 1px var(--grid);
   }
   .chip:first-child { margin-left: 0; }
-  .chip.payer { background: var(--ink); color: var(--surface); }
+  .chip.payer { background: var(--accent); color: var(--accent-ink); }
   .cap { font-size: 11px; color: var(--muted); margin-left: 6px; }
-  .flags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 3px; }
-  .flag { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--grid); color: var(--ink-2); display: inline-flex; align-items: center; gap: 4px; }
+  .flags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+  .flag { font-size: 10px; font-weight: 600; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--grid); color: var(--ink-2); display: inline-flex; align-items: center; gap: 4px; }
   .flag i { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
   svg.spark rect { fill: var(--accent); }
-  .detail td { background: color-mix(in srgb, var(--grid) 25%, transparent); cursor: default; }
+  .detail td { background: var(--surface-2); cursor: default; }
   .detail-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
-  .detail h4 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); }
+  .detail h4 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
   .detail .line { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
-  .member-pill { display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px 2px 9px; border-radius: 999px; border: 1px solid var(--grid); background: var(--surface-2); font-size: 12px; }
+  .member-pill { display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px 2px 9px; border-radius: 999px; border: 1px solid var(--grid); background: var(--surface); font-size: 12px; }
   .member-pill button { border: none; background: none; padding: 0 4px; color: var(--muted); }
   .detail input[type=number] { width: 72px; }
 
   /* entitlements */
-  .path { padding: 9px 0; border-top: 1px solid var(--grid); font-size: 13px; }
+  .path { padding: 10px 0; border-top: 1px solid var(--grid); font-size: 13px; }
   .path:first-child { border-top: none; padding-top: 0; }
   .path .who { font-size: 11px; color: var(--muted); margin-top: 2px; }
   .path .arrow { color: var(--muted); margin: 0 4px; }
   .path .hit { color: var(--bad-text); font-weight: 600; }
 
   /* right column */
-  .member { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; padding: 9px 0; border-top: 1px solid var(--grid); }
+  .member { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; padding: 10px 0; border-top: 1px solid var(--grid); }
   .member:first-child { border-top: none; padding-top: 0; }
   .member .name { font-weight: 600; }
   .member .role { font-size: 11px; color: var(--muted); font-weight: 400; margin-left: 4px; }
-  .member .figures { font-size: 12px; color: var(--ink-2); }
+  .member .figures { font-size: 12px; color: var(--ink-2); display: block; margin: 0; }
   .member .net { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
   .member .net small { display: block; font-weight: 400; font-size: 11px; color: var(--muted); }
-  .settle { display: flex; justify-content: space-between; padding: 7px 0; border-top: 1px solid var(--grid); font-size: 13px; }
+  .settle { display: flex; justify-content: space-between; padding: 8px 0; border-top: 1px solid var(--grid); font-size: 13px; }
   .settle:first-child { border-top: none; padding-top: 0; }
   .settle .amt { font-weight: 700; font-variant-numeric: tabular-nums; }
-  .renewal { display: grid; grid-template-columns: 54px minmax(0, 1fr) auto; gap: 10px; padding: 7px 0; border-top: 1px solid var(--grid); font-size: 13px; align-items: baseline; }
+  .renewal { display: grid; grid-template-columns: 54px minmax(0, 1fr) auto; gap: 10px; padding: 8px 0; border-top: 1px solid var(--grid); font-size: 13px; align-items: baseline; }
   .renewal:first-child { border-top: none; padding-top: 0; }
   .renewal .d { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .renewal .amt { font-variant-numeric: tabular-nums; }
   .total { display: flex; justify-content: space-between; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--ink); font-weight: 700; font-size: 13px; }
-  .bar-row { display: grid; grid-template-columns: 150px minmax(0, 1fr) 60px; gap: 10px; align-items: center; margin-bottom: 9px; font-size: 12px; }
+  .bar-row { display: grid; grid-template-columns: 150px minmax(0, 1fr) 60px; gap: 10px; align-items: center; margin-bottom: 10px; font-size: 12px; }
   .bar-row .lab { color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .bar-track { height: 10px; background: var(--grid); border-radius: 4px; overflow: hidden; }
+  .bar-track { height: 8px; background: var(--grid); border-radius: 4px; overflow: hidden; }
   .bar-fill { height: 100%; background: var(--accent); border-radius: 4px; }
   .bar-row .val { text-align: right; font-variant-numeric: tabular-nums; }
 
   form.add { display: flex; flex-direction: column; gap: 10px; }
-  form.add label { display: block; font-size: 11px; color: var(--ink-2); margin-bottom: 4px; }
+  form.add label { display: block; font-size: 12px; color: var(--ink-2); margin-bottom: 5px; }
   form.add select, form.add input[type=date] { width: 100%; }
   .checks { display: flex; flex-wrap: wrap; gap: 6px 12px; font-size: 13px; }
   .checks label { display: inline-flex; gap: 5px; align-items: center; font-size: 13px; color: var(--ink); margin: 0; }
-  .hint { font-size: 11px; color: var(--muted); }
+  .hint { font-size: 12px; color: var(--muted); }
 
   .toast {
     position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%) translateY(20px);
-    background: var(--ink); color: var(--surface); padding: 10px 16px; border-radius: 10px;
+    background: var(--ink); color: var(--surface); padding: 11px 16px; border-radius: 12px;
     font-size: 13px; opacity: 0; transition: all .2s; pointer-events: none; max-width: min(560px, calc(100vw - 32px));
   }
   .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
   .toast.err { background: var(--bad-text); color: #fff; }
 
-  @media (max-width: 1000px) {
+  @media (max-width: 1080px) {
     main { grid-template-columns: minmax(0, 1fr); }
     .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   }
   @media (max-width: 640px) {
     header, main { padding-left: 16px; padding-right: 16px; }
+    header h1 { font-size: 22px; }
+    .card { padding: 16px; border-radius: 16px; }
+    .tiles { grid-template-columns: minmax(0, 1fr); }
     .detail-grid { grid-template-columns: 1fr; }
     .hide-sm { display: none; }
+    .imp-item { grid-template-columns: 1fr; }
+    .preview .hint, .bar .hint { margin-left: 0; }
+    .finding { grid-template-columns: 4px minmax(0, 1fr); }
+    .finding .side { grid-column: 2; text-align: left; display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+    .finding .acts { justify-content: flex-start; margin-top: 0; margin-left: auto; }
+    .wi-form { grid-template-columns: 1fr; }
+    .outcome { grid-template-columns: 88px minmax(0, 1fr); }
+    .outcome .s { grid-column: 2; }
+    .evidence li { grid-template-columns: 60px minmax(0, 1fr) 28px; }
   }
 </style>
 </head>
 <body>
 
 <header>
-  <div>
-    <h1>SubWatch</h1>
-    <div class="tag">Household subscription optimizer</div>
+  <div class="brand">
+    <span class="mark" aria-hidden="true">S</span>
+    <div>
+      <div class="eyebrow">Household / Overview</div>
+      <h1>SubWatch</h1>
+      <div class="tag">The cheapest way to keep everything your household uses.</div>
+    </div>
   </div>
   <div class="controls">
     <select id="householdSelect" aria-label="Household"></select>
-    <button id="runBtn">Run optimizer</button>
+    <button id="runBtn">Refresh findings</button>
   </div>
 </header>
 
@@ -255,16 +404,55 @@
   <div class="stack">
     <div class="tiles" id="tiles"></div>
 
+    <section class="card" id="optCard">
+      <div class="card-head">
+        <div>
+          <h2>Optimize my household</h2>
+          <p class="sub">One cheapest plan for everyone: every need stays covered, no plan goes over its limit, and nothing passive is cancelled.</p>
+        </div>
+        <button class="primary" id="optRun">Run</button>
+      </div>
+      <div id="optimizer"></div>
+    </section>
+
     <section class="card">
       <h2>Optimizer findings</h2>
-      <p class="sub">Things the database found by cross-checking plans, members, entitlements and usage.</p>
+      <p class="sub">Each finding shows the path that explains it, how sure the database is, and the facts behind it.</p>
       <div class="tabs" id="tabs"></div>
       <div id="findings"></div>
+    </section>
+
+    <section class="card" id="wiCard">
+      <h2>What if…</h2>
+      <p class="sub">Simulate a change without touching anything: see who loses what, the cost, and the cheapest repair.</p>
+      <div class="wi-form">
+        <div>
+          <label for="wiType">Change</label>
+          <select id="wiType">
+            <option value="cancel_subscription">Cancel a subscription</option>
+            <option value="switch_plan">Switch a plan</option>
+            <option value="remove_member">A member moves out</option>
+            <option value="remove_inclusion">A plan stops including a service</option>
+            <option value="raise_price">A price goes up</option>
+          </select>
+        </div>
+        <div class="wi-fields" id="wiFields"></div>
+      </div>
+      <div class="wi-save">
+        <button class="primary" id="wiRun">Simulate</button>
+        <input id="wiName" placeholder="Name this scenario to save it" aria-label="Scenario name" maxlength="100" />
+        <button id="wiSave">Save scenario</button>
+      </div>
+      <div id="wiResult"></div>
+      <h3>Saved scenarios</h3>
+      <div id="wiSaved"></div>
+      <div id="wiCompare"></div>
     </section>
 
     <section class="card">
       <h2>Subscriptions</h2>
       <p class="sub">Click a row to manage members, log usage or cancel. Bars show sessions per 30 days over the last 6 months.</p>
+      <div class="scroll">
       <table>
         <thead>
           <tr>
@@ -277,6 +465,7 @@
         </thead>
         <tbody id="subsBody"></tbody>
       </table>
+      </div>
     </section>
 
     <section class="card">
@@ -301,6 +490,12 @@
 
   <div class="stack">
     <section class="card">
+      <h2>What each person needs</h2>
+      <p class="sub">From the last 30 days of usage, plus phone and storage plans (nobody logs those). The optimizer never drops a need.</p>
+      <div id="needs"></div>
+    </section>
+
+    <section class="card">
       <h2>Who pays what</h2>
       <p class="sub">Fair cost = sole subs in full, plus a share of shared plans (half split equally, half by minutes used).</p>
       <div id="members"></div>
@@ -314,7 +509,7 @@
 
     <section class="card">
       <h2>Next 30 days</h2>
-      <p class="sub">Upcoming renewals.</p>
+      <p class="sub">Upcoming renewals, at the price on each date.</p>
       <div id="forecast"></div>
     </section>
 
@@ -368,14 +563,26 @@ const TABS = [
   ['all', 'All'], ['dup', 'Hidden duplicates'], ['plans', 'Family plans'], ['bundle', 'Bundles'],
   ['churn', 'Usage falling'], ['waste', 'Unused'], ['overlap', 'Overlap'],
 ];
+const CHANGE_LABEL = {
+  cancel_subscription: 'Cancel', switch_plan: 'Switch plan', remove_member: 'Moves out',
+  remove_inclusion: 'Drops inclusion', raise_price: 'Price rise',
+};
 
-const state = { hid: null, tab: 'all', open: null, members: [], subs: [], alerts: [], plans: [], preview: null, importId: null };
+const state = {
+  hid: null, tab: 'all', open: null, members: [], subs: [], alerts: [], plans: [], preview: null, importId: null,
+  ents: [], needs: [], evOpen: new Set(), spendDate: null,
+  run: null, runPreview: null, runStale: false,
+  wi: { result: null, note: null, saved: [], picked: [], compare: null },
+};
 
 const $ = (id) => document.getElementById(id);
 const inr = (n) => '₹' + Math.round(Number(n)).toLocaleString('en-IN');
+const inr2 = (n) => '₹' + Number(n).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+const signed = (n) => (Number(n) > 0 ? '+' : Number(n) < 0 ? '−' : '') + inr2(Math.abs(Number(n)));
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const initials = (name) => name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
 const first = (name) => name.split(' ')[0];
+const nameOf = (uid) => { const m = state.members.find(x => x.user_id === uid); return m ? m.full_name : `#${uid}`; };
 
 async function api(path, opts = {}) {
   const res = await fetch(API + path, {
@@ -384,7 +591,9 @@ async function api(path, opts = {}) {
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.error || res.statusText);
+    const err = new Error(body.error || res.statusText);
+    err.status = res.status;
+    throw err;
   }
   return res.status === 204 ? null : res.json();
 }
@@ -408,6 +617,15 @@ async function act(fn, okMsg) {
   }
 }
 
+const confBadge = (c) => c ? `<span class="badge conf-${c}" title="Confidence"><i></i>${c}</span>` : '';
+
+// "A (Plan) → B → C" as a chip, with the members it covers
+function pathChip(label, who) {
+  const parts = String(label || '').split(' → ');
+  const end = parts.pop();
+  return `<span class="pathchip">${parts.map(p => `<span>${esc(p)}</span><span class="arr">→</span>`).join('')}<span class="end">${esc(end)}</span>${who ? `<span class="who">· ${esc(who)}</span>` : ''}</span>`;
+}
+
 // ---------- loading ----------
 async function init() {
   const [households, plans] = await Promise.all([api('/households'), api('/plans')]);
@@ -416,34 +634,41 @@ async function init() {
     .map(h => `<option value="${h.household_id}">${esc(h.name)} (${h.member_count})</option>`).join('');
   $('householdSelect').onchange = (e) => {
     state.hid = Number(e.target.value);
-    Object.assign(state, { open: null, preview: null, importId: null });
+    Object.assign(state, { open: null, preview: null, importId: null, run: null, runPreview: null, runStale: false });
+    state.wi = { result: null, note: null, saved: [], picked: [], compare: null };
     $('impResults').innerHTML = '';
-    loadAll();
+    loadAll().then(() => { renderOptimizer(); renderWiFields(); renderWiResult(); renderWiCompare(); });
   };
   state.hid = households[0].household_id;
   renderPlanOptions();
   $('fStart').valueAsDate = new Date();
   await loadAll();
+  renderOptimizer();
+  renderWiFields();
 }
 
 async function loadAll() {
   const h = state.hid;
-  const [summary, members, subs, alerts, ents, settle, forecast] = await Promise.all([
+  const [summary, members, subs, alerts, ents, settle, forecast, needs, scenarios] = await Promise.all([
     api(`/households/${h}/summary`), api(`/households/${h}/members`), api(`/households/${h}/subscriptions`),
     api(`/households/${h}/alerts`), api(`/households/${h}/entitlements`), api(`/households/${h}/settle-up`),
-    api(`/households/${h}/forecast?days=30`),
+    api(`/households/${h}/forecast?days=30`), api(`/households/${h}/needs`), api(`/households/${h}/scenarios`),
   ]);
-  Object.assign(state, { members, subs, alerts });
+  Object.assign(state, { members, subs, alerts, ents, needs });
+  state.wi.saved = scenarios;
+  state.wi.picked = state.wi.picked.filter(id => scenarios.some(s => s.scenario_id === id));
   renderTiles(summary);
   renderFindings();
   renderSubs();
   renderEntitlements(ents);
+  renderNeeds();
   renderMembers();
   renderSettle(settle);
   renderForecast(forecast);
   renderCategories(summary.spend_by_category);
   renderFormMembers();
   renderImportUsers();
+  renderWiSaved();
   if (state.importId) await loadImportResults();
 }
 
@@ -451,16 +676,23 @@ async function loadAll() {
 function renderTiles(s) {
   const budget = Number(s.household.monthly_budget || 0);
   const pct = budget ? Math.round(100 * s.monthly_spend / budget) : null;
+  const today = new Date().toISOString().slice(0, 10);
   $('tiles').innerHTML = `
-    <div class="tile">
+    <div class="tile hero">
       <div class="label">Household spend</div>
       <div class="value">${inr(s.monthly_spend)}</div>
       <div class="hint">per month · ${pct !== null ? pct + '% of ' + inr(budget) + ' budget' : 'no budget set'}</div>
+      <div class="spend-on">
+        <label class="eyebrow" for="spendDate">Spend on</label>
+        <input type="date" id="spendDate" value="${state.spendDate || today}" />
+        <span class="at" id="spendAt"></span>
+      </div>
     </div>
     <div class="tile">
       <div class="label">Savings found</div>
       <div class="value" style="color:var(--good-text)">${inr(s.savings_found)}</div>
-      <div class="hint">per month · ${inr(s.savings_found * 12)} a year</div>
+      <div class="hint">per month · High and Medium confidence only</div>
+      ${Number(s.worth_a_look) > 0 ? `<div class="hint" style="margin-top:4px">+ ${inr(s.worth_a_look)} worth a look${s.low_confidence_findings ? ` · ${s.low_confidence_findings} low-confidence` : ''}</div>` : ''}
     </div>
     <div class="tile">
       <div class="label">Efficiency score</div>
@@ -472,9 +704,53 @@ function renderTiles(s) {
       <div class="value">${s.active_subscriptions}</div>
       <div class="hint">active · ${state.members.length} people</div>
     </div>`;
+  $('spendDate').onchange = (e) => { state.spendDate = e.target.value; loadSpendAt(s.monthly_spend); };
+  loadSpendAt(s.monthly_spend);
+}
+
+async function loadSpendAt(todaySpend) {
+  const d = $('spendDate').value;
+  const today = new Date().toISOString().slice(0, 10);
+  if (!d || d === today) { $('spendAt').textContent = 'today'; return; }
+  try {
+    const r = await api(`/households/${state.hid}/spend?date=${encodeURIComponent(d)}`);
+    const diff = Number(r.monthly_spend) - Number(todaySpend);
+    $('spendAt').textContent = `${inr2(r.monthly_spend)}/mo` + (Math.abs(diff) >= 0.01 ? ` (${signed(diff)} vs today)` : ' (same as today)');
+  } catch (e) {
+    $('spendAt').textContent = e.message;
+  }
 }
 
 // ---------- findings ----------
+function findingHtml(a, muted) {
+  const t = TYPES[a.alert_type];
+  const soft = SOFT.has(a.alert_type) || muted;
+  const chips = (a.reasons || []).filter(r => r.role === 'subject' && r.reason_label)
+    .map(r => pathChip(r.reason_label, (r.member_names || []).map(first).join(', '))).join('');
+  const ev = a.evidence || [];
+  const open = state.evOpen.has(a.alert_id);
+  return `
+    <div class="finding ${muted ? 'muted' : ''}">
+      <div class="rail" style="background:${t.color}"></div>
+      <div>
+        <div class="kind">${t.label} ${confBadge(a.confidence)}</div>
+        <div class="msg">${esc(a.message)}</div>
+        ${chips ? `<div class="reasons">${chips}</div>` : ''}
+        ${ev.length ? `<button class="link" data-ev="${a.alert_id}" style="margin-top:8px">${open ? 'Hide' : 'Why?'} ${ev.length} fact${ev.length > 1 ? 's' : ''} behind it</button>` : ''}
+        ${open ? `<ul class="evidence">${ev.map(e => `<li><span class="etype">${esc(e.evidence_type)}</span><span>${esc(e.value)}</span><span class="w ${e.weight < 0 ? 'neg' : ''}">${e.weight > 0 ? '+' : ''}${e.weight}</span></li>`).join('')}</ul>` : ''}
+      </div>
+      <div class="side">
+        ${a.potential_monthly_savings ? `<div class="save ${soft ? 'soft' : ''}">${soft ? 'up to ' : 'save '}${inr(a.potential_monthly_savings)}</div><div class="per">per month${muted ? ' · not counted' : ''}</div>` : ''}
+        <div class="acts">
+          <button class="small" data-preview="${a.alert_id}">Preview fix</button>
+          <button class="link" data-id="${a.alert_id}" data-status="resolved">Done</button>
+          <button class="link" data-id="${a.alert_id}" data-status="dismissed">Dismiss</button>
+        </div>
+      </div>
+      ${state.preview && state.preview.id === a.alert_id ? previewPanel(state.preview) : ''}
+    </div>`;
+}
+
 function renderFindings() {
   const counts = { all: state.alerts.length };
   for (const a of state.alerts) counts[TYPES[a.alert_type].tab] = (counts[TYPES[a.alert_type].tab] || 0) + 1;
@@ -486,28 +762,19 @@ function renderFindings() {
   $('tabs').querySelectorAll('button').forEach(b => b.onclick = () => { state.tab = b.dataset.tab; renderFindings(); });
 
   const list = state.alerts.filter(a => state.tab === 'all' || TYPES[a.alert_type].tab === state.tab);
-  $('findings').innerHTML = list.length ? list.map(a => {
-    const t = TYPES[a.alert_type];
-    const soft = SOFT.has(a.alert_type);
-    return `
-      <div class="finding">
-        <div class="rail" style="background:${t.color}"></div>
-        <div>
-          <div class="kind">${t.label}</div>
-          <div class="msg">${esc(a.message)}</div>
-        </div>
-        <div class="side">
-          ${a.potential_monthly_savings ? `<div class="save ${soft ? 'soft' : ''}">${soft ? 'up to ' : 'save '}${inr(a.potential_monthly_savings)}</div><div class="per">per month</div>` : ''}
-          <div class="acts">
-            <button class="small" data-preview="${a.alert_id}">Preview fix</button>
-            <button class="link" data-id="${a.alert_id}" data-status="resolved">Done</button>
-            <button class="link" data-id="${a.alert_id}" data-status="dismissed">Dismiss</button>
-          </div>
-        </div>
-        ${state.preview && state.preview.id === a.alert_id ? previewPanel(state.preview) : ''}
-      </div>`;
-  }).join('') : `<div class="empty">Nothing to fix here. Nice.</div>`;
+  const sure = list.filter(a => a.confidence !== 'Low');
+  const low = list.filter(a => a.confidence === 'Low');
+  $('findings').innerHTML = (sure.length ? sure.map(a => findingHtml(a, false)).join('') : (low.length ? '' : `<div class="empty">Nothing to fix here. Nice.</div>`))
+    + (low.length ? `
+      <div class="group-head"><span class="eyebrow">Worth a look · low confidence</span>
+        <span class="hint">Not counted in savings found: check the usage logs before acting.</span></div>
+      ${low.map(a => findingHtml(a, true)).join('')}` : '');
 
+  $('findings').querySelectorAll('button[data-ev]').forEach(b => b.onclick = () => {
+    const id = Number(b.dataset.ev);
+    state.evOpen.has(id) ? state.evOpen.delete(id) : state.evOpen.add(id);
+    renderFindings();
+  });
   $('findings').querySelectorAll('button[data-preview]').forEach(b => b.onclick = async () => {
     const id = Number(b.dataset.preview);
     if (state.preview && state.preview.id === id) { state.preview = null; return renderFindings(); }
@@ -557,6 +824,382 @@ function previewPanel(p) {
         <span class="hint">This preview ran in a transaction that was rolled back, so nothing has changed yet.</span>
       </div>
     </div>`;
+}
+
+// ---------- steps (optimizer runs and what-if repairs) ----------
+function stepsTable(steps) {
+  if (!steps.length) return '<div class="empty">No changes: this is already the cheapest way.</div>';
+  return `<div class="scroll"><table class="steps"><tbody>${steps.map(s => {
+    const label = s.reason_label || (s.reason_path && s.reason_path.length ? null : '');
+    const saving = Number(s.saving);
+    return `
+      <tr class="${s.confidence === 'Low' ? 'low' : ''}">
+        <td class="no">${s.step_no}</td>
+        <td>
+          <div class="what">${esc(s.description)}</div>
+          <div class="why">${esc(s.reason)}</div>
+          <div class="meta"><span class="act-badge act-${s.action}">${s.action.replace('_', ' ')}</span>${confBadge(s.confidence)}${label ? pathChip(label) : ''}</div>
+        </td>
+        <td class="amt ${saving > 0 ? 'pos' : saving < 0 ? 'neg' : ''}">${saving === 0 ? '—' : signed(saving) + '/mo'}</td>
+      </tr>`;
+  }).join('')}</tbody></table></div>`;
+}
+
+// ---------- optimizer ----------
+const OUTCOME_HINT = { adopted: 'done as suggested', superseded: 'replaced by a cheaper combination', rejected: 'kept' };
+
+function renderOptimizer() {
+  const r = state.run;
+  if (!r) {
+    $('optimizer').innerHTML = state.runStale
+      ? staleNotice()
+      : `<div class="notice info">Runs the exact search (branch and bound) over plans, family tiers and bundles. Conflicting findings resolve to one choice.</div>`;
+    wireStale();
+    return;
+  }
+  const total = Number(r.monthly_saving);
+  const counted = Number(r.counted_saving);
+  const outcomes = r.finding_outcomes || [];
+  $('optimizer').innerHTML = `
+    ${state.runStale ? staleNotice() : ''}
+    ${r.status === 'applied' ? `<div class="notice ok">Applied ${new Date(r.applied_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}. Run again to check for more.</div>` : ''}
+    <div class="figures">
+      <div class="fig"><div class="k">Today</div><div class="v">${inr2(r.cost_before)}</div><div class="d">per month</div></div>
+      <div class="fig"><div class="k">After</div><div class="v">${inr2(r.cost_after)}</div><div class="d">${r.steps.length} step${r.steps.length === 1 ? '' : 's'}</div></div>
+      <div class="fig accent"><div class="k">Counted saving</div><div class="v">${inr2(counted)}</div><div class="d">High + Medium steps</div></div>
+      <div class="fig"><div class="k">Total saving</div><div class="v">${inr2(total)}</div><div class="d">${counted < total ? inr2(total - counted) + ' is low confidence' : 'all of it counts'}</div></div>
+    </div>
+    ${r.is_optimal ? '' : `<div class="notice warn">The search hit its time limit: this is the best answer found, and may not be the cheapest.</div>`}
+    ${stepsTable(r.steps)}
+    ${outcomes.length ? `
+    <details class="fold"><summary>How it settled ${outcomes.length} findings</summary>
+      <div class="outcomes" style="margin-top:10px">${outcomes.map(o => `
+        <div class="outcome"><span class="badge out-${o.outcome}">${o.outcome}</span>
+          <span class="t">${esc(TYPES[o.alert_type] ? TYPES[o.alert_type].label : o.alert_type)} · ${esc(OUTCOME_HINT[o.outcome])}</span>
+          <span class="s">${o.alert_saving != null ? inr(o.alert_saving) + '/mo' : ''}</span></div>`).join('')}
+      </div></details>` : ''}
+    ${state.runPreview ? `
+      <div class="preview" style="margin-top:14px">
+        <div class="pv-title">Preview — nothing was changed</div>
+        <ol>${state.runPreview.steps.map(st => `<li>${esc(st)}</li>`).join('')}</ol>
+        <div class="pv-nums"><span>Monthly spend <b>${inr2(state.runPreview.spend_before)} → ${inr2(state.runPreview.spend_after)}</b></span></div>
+      </div>` : ''}
+    ${r.status === 'proposed' && r.steps.length ? `
+    <div class="bar">
+      <button id="optPreview">Preview</button>
+      <button class="primary" id="optApply">Apply all steps</button>
+      <span class="hint">All or nothing: one transaction, rolled back if any step fails.</span>
+    </div>` : ''}`;
+  if ($('optPreview')) $('optPreview').onclick = () => runAction('preview');
+  if ($('optApply')) $('optApply').onclick = () => runAction('apply');
+  wireStale();
+}
+
+function staleNotice() {
+  return `<div class="notice warn">The household changed since this run was computed, so it wasn't applied. <button class="small" data-rerun>Run again</button></div>`;
+}
+function wireStale() {
+  $('optimizer').querySelectorAll('[data-rerun]').forEach(b => b.onclick = runOptimizer);
+}
+
+async function runOptimizer() {
+  $('optRun').disabled = true;
+  try {
+    state.run = await api(`/households/${state.hid}/optimize`, { method: 'POST' });
+    state.runPreview = null;
+    state.runStale = false;
+    renderOptimizer();
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    $('optRun').disabled = false;
+  }
+}
+$('optRun').onclick = runOptimizer;
+
+async function runAction(kind) {
+  const id = state.run.run_id;
+  document.querySelectorAll('#optimizer .bar button').forEach(b => (b.disabled = true));
+  try {
+    const r = await api(`/optimization-runs/${id}/${kind}`, { method: 'POST' });
+    if (kind === 'preview') {
+      state.runPreview = r;
+      renderOptimizer();
+    } else {
+      toast(r.monthly_saving > 0 ? `Applied — saving ${inr(r.monthly_saving)} a month` : 'Applied');
+      state.runPreview = null;
+      state.run = await api(`/optimization-runs/${id}`);
+      await loadAll();
+      renderOptimizer();
+    }
+  } catch (e) {
+    if (e.status === 409 && /changed since|already stale/.test(e.message)) {
+      state.runStale = true;
+      state.run = null;
+      state.runPreview = null;
+      renderOptimizer();
+    } else {
+      toast(e.message, true);
+      renderOptimizer();
+    }
+  }
+}
+
+// ---------- what-if ----------
+function inclusionEdges() {
+  const edges = new Map();
+  for (const r of state.ents) {
+    if (!r.path) continue;
+    const parts = r.path_label.split(' → ');
+    for (let i = 0; i + 1 < r.path.length; i++) {
+      const key = r.path[i] + '>' + r.path[i + 1];
+      if (!edges.has(key)) edges.set(key, { parent: r.path[i], included: r.path[i + 1], label: `${parts[i]} stops including ${parts[i + 1]}` });
+    }
+  }
+  return [...edges.values()];
+}
+
+function field(label, html) { return `<div class="field"><label>${label}</label>${html}</div>`; }
+
+function renderWiFields() {
+  const type = $('wiType').value;
+  const active = state.subs.filter(s => s.status === 'active');
+  const subOpts = active.map(s => `<option value="${s.subscription_id}">${esc(s.service_name)} ${esc(s.plan_name)} · ${esc(first(s.payer_name))}</option>`).join('');
+  let html = '';
+  if (type === 'cancel_subscription') {
+    html = field('Subscription', `<select id="wiSub">${subOpts}</select>`);
+  } else if (type === 'switch_plan') {
+    html = field('Subscription', `<select id="wiSub">${subOpts}</select>`) + field('New plan', `<select id="wiPlan"></select>`);
+  } else if (type === 'remove_member') {
+    html = field('Who moves out', `<select id="wiUser">${state.members.map(m => `<option value="${m.user_id}">${esc(m.full_name)}</option>`).join('')}</select>`);
+  } else if (type === 'remove_inclusion') {
+    const edges = inclusionEdges();
+    html = field('Inclusion', edges.length
+      ? `<select id="wiEdge">${edges.map(e => `<option value="${e.parent}>${e.included}">${esc(e.label)}</option>`).join('')}</select>`
+      : `<select id="wiEdge" disabled><option>No plan here includes another service</option></select>`);
+  } else if (type === 'raise_price') {
+    const seen = new Set();
+    const held = active.filter(s => !seen.has(s.plan_id) && seen.add(s.plan_id));
+    html = field('Plan', `<select id="wiPricePlan">${held.map(s => `<option value="${s.plan_id}" data-price="${s.monthly_price}">${esc(s.service_name)} ${esc(s.plan_name)} · ${inr2(s.monthly_price)}/mo</option>`).join('')}</select>`)
+         + field('New monthly price (₹)', `<input type="number" id="wiPrice" min="0" step="1" />`);
+  }
+  $('wiFields').innerHTML = html;
+  if ($('wiSub') && $('wiPlan')) { $('wiSub').onchange = fillSwitchPlans; fillSwitchPlans(); }
+  if ($('wiPricePlan')) { $('wiPricePlan').onchange = suggestPrice; suggestPrice(); }
+}
+
+function fillSwitchPlans() {
+  const sub = state.subs.find(s => s.subscription_id === Number($('wiSub').value));
+  const options = sub ? state.plans.filter(p => p.service_id === sub.service_id && p.plan_id !== sub.plan_id) : [];
+  $('wiPlan').innerHTML = options.length
+    ? options.map(p => `<option value="${p.plan_id}">${esc(p.plan_name)} · ${inr2(p.monthly_price)}/mo · up to ${p.max_members}</option>`).join('')
+    : '<option value="">No other plan of this service</option>';
+}
+
+function suggestPrice() {
+  const opt = $('wiPricePlan').selectedOptions[0];
+  if (opt) $('wiPrice').value = Math.ceil(Number(opt.dataset.price) * 1.2);
+}
+
+function readChange() {
+  const type = $('wiType').value;
+  const num = (id) => Number($(id) && $(id).value);
+  if (type === 'cancel_subscription') return { type, subscription_id: num('wiSub') };
+  if (type === 'switch_plan') return { type, subscription_id: num('wiSub'), plan_id: num('wiPlan') };
+  if (type === 'remove_member') return { type, user_id: num('wiUser') };
+  if (type === 'remove_inclusion') {
+    const [parent, included] = String($('wiEdge').value).split('>').map(Number);
+    return { type, parent_plan_id: parent, included_plan_id: included };
+  }
+  return { type, plan_id: num('wiPricePlan'), monthly_price: num('wiPrice') };
+}
+
+$('wiType').onchange = renderWiFields;
+$('wiRun').onclick = async () => {
+  $('wiRun').disabled = true;
+  try {
+    state.wi.result = await api(`/households/${state.hid}/what-if`, { method: 'POST', body: JSON.stringify(readChange()) });
+    state.wi.note = null;
+    renderWiResult();
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    $('wiRun').disabled = false;
+  }
+};
+$('wiSave').onclick = async () => {
+  const name = $('wiName').value.trim();
+  if (!name) { toast('Give the scenario a name first', true); $('wiName').focus(); return; }
+  $('wiSave').disabled = true;
+  try {
+    const r = await api(`/households/${state.hid}/scenarios`, { method: 'POST', body: JSON.stringify({ name, change: readChange() }) });
+    state.wi.result = r.result;
+    state.wi.note = `Saved as “${r.scenario.name}”.`;
+    $('wiName').value = '';
+    renderWiResult();
+    state.wi.saved = await api(`/households/${state.hid}/scenarios`);
+    renderWiSaved();
+    toast('Scenario saved');
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    $('wiSave').disabled = false;
+  }
+};
+
+function renderWiResult() {
+  const r = state.wi.result;
+  if (!r) { $('wiResult').innerHTML = ''; return; }
+  const notRestored = new Set(r.repair.needs_not_restored.map(n => n.user_id + ':' + n.service_id));
+  const status = (l) => l.given_up ? '<span class="badge out-rejected">given up</span>'
+    : l.needed ? (notRestored.has(l.user_id + ':' + l.service_id) ? '<span class="badge conf-Low">needed · not restored</span>' : '<span class="badge out-superseded">needed · repaired</span>')
+    : '<span class="badge src-passive">not needed</span>';
+  $('wiResult').innerHTML = `
+    <h3>${esc(r.description)}</h3>
+    ${state.wi.note ? `<div class="notice info">${esc(state.wi.note)}</div>` : ''}
+    <div class="figures">
+      <div class="fig"><div class="k">Today</div><div class="v">${inr2(r.cost.today)}</div><div class="d">per month</div></div>
+      <div class="fig"><div class="k">Right after the change</div><div class="v">${inr2(r.cost.after_change)}</div><div class="d">${signed(r.cost.change)} vs today</div></div>
+      <div class="fig accent"><div class="k">After the cheapest repair</div><div class="v">${inr2(r.repair.cost_after)}</div><div class="d">${signed(r.repair.change_vs_today)} vs today</div></div>
+    </div>
+    <h3>Affected members</h3>
+    ${r.affected_members.length ? `<div class="affected">${r.affected_members.map(a => `
+      <div class="aff"><b>${esc(a.name)}</b>${a.services_lost.length ? 'loses ' + esc(a.services_lost.join(', ')) : ''}${a.pays_more ? (a.services_lost.length ? ' · ' : '') + 'pays more' : ''}</div>`).join('')}</div>`
+      : '<div class="empty">Nobody loses access.</div>'}
+    ${r.coverage_lost.length ? `
+    <h3>Coverage lost</h3>
+    <div class="scroll"><table class="lost-table"><thead><tr><th>Member</th><th>Service</th><th>Status</th></tr></thead><tbody>
+      ${r.coverage_lost.map(l => `<tr><td>${esc(first(l.name))}</td><td>${esc(l.service)}</td><td>${status(l)}</td></tr>`).join('')}
+    </tbody></table></div>` : ''}
+    ${r.repair.needs_not_restored.length ? `<div class="notice warn">No plan in the catalog can restore: ${r.repair.needs_not_restored.map(n => esc(first(n.name)) + ' / ' + esc(n.service)).join(', ')}.</div>` : ''}
+    <h3>Cheapest repair${r.repair.needs_restored ? ` · restores ${r.repair.needs_restored} need${r.repair.needs_restored > 1 ? 's' : ''}` : ''}</h3>
+    ${stepsTable(r.repair.steps)}
+    <div class="hint" style="margin-top:8px">Simulated on a copy of the household's data. Nothing was changed.${r.repair.is_optimal ? '' : ' The search hit its time limit.'}</div>`;
+}
+
+function renderWiSaved() {
+  const list = state.wi.saved;
+  $('wiSaved').innerHTML = list.length ? list.map(s => `
+    <div class="scen">
+      <input type="checkbox" data-pick="${s.scenario_id}" ${state.wi.picked.includes(s.scenario_id) ? 'checked' : ''} aria-label="Pick ${esc(s.name)} to compare" />
+      <div><div class="n">${esc(s.name)}</div><div class="ty">${esc(CHANGE_LABEL[s.change_type] || s.change_type)}</div></div>
+      <div class="b"><button class="small" data-open="${s.scenario_id}">Open</button><button class="small" data-del="${s.scenario_id}" title="Delete">Delete</button></div>
+    </div>`).join('') + `
+    <div class="bar"><button id="wiCompareBtn" ${state.wi.picked.length === 2 ? '' : 'disabled'}>Compare the two picked</button>
+      <span class="hint">Tick two scenarios to compare them side by side.</span></div>`
+    : '<div class="empty">No saved scenarios yet. Name one above and save it.</div>';
+
+  $('wiSaved').querySelectorAll('[data-pick]').forEach(c => c.onchange = () => {
+    const id = Number(c.dataset.pick);
+    state.wi.picked = c.checked ? [...state.wi.picked.filter(x => x !== id), id].slice(-2) : state.wi.picked.filter(x => x !== id);
+    renderWiSaved();
+  });
+  $('wiSaved').querySelectorAll('[data-open]').forEach(b => b.onclick = async () => {
+    try {
+      const r = await api(`/scenarios/${b.dataset.open}`);
+      state.wi.result = r.result;
+      state.wi.note = `Re-simulated “${r.scenario.name}” on today's data.`
+        + (r.previous_run && r.previous_run.stale ? ' The household has changed since it was last opened, so the numbers may differ.' : '');
+      renderWiResult();
+      $('wiResult').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } catch (e) { toast(e.message, true); }
+  });
+  $('wiSaved').querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
+    try {
+      await api(`/scenarios/${b.dataset.del}`, { method: 'DELETE' });
+      state.wi.picked = state.wi.picked.filter(x => x !== Number(b.dataset.del));
+      state.wi.saved = await api(`/households/${state.hid}/scenarios`);
+      if (state.wi.compare) state.wi.compare = null;
+      renderWiSaved();
+      renderWiCompare();
+      toast('Scenario deleted');
+    } catch (e) { toast(e.message, true); }
+  });
+  if ($('wiCompareBtn')) $('wiCompareBtn').onclick = async () => {
+    try {
+      const [a, b] = state.wi.picked;
+      state.wi.compare = await api(`/scenarios/compare?a=${a}&b=${b}`);
+      renderWiCompare();
+    } catch (e) { toast(e.message, true); }
+  };
+}
+
+function renderWiCompare() {
+  const c = state.wi.compare;
+  if (!c) { $('wiCompare').innerHTML = ''; return; }
+  const a = c.comparison.a, b = c.comparison.b;
+  const row = (label, ka, fmt = (x) => x, lowerWins = true) => {
+    const va = Number(a[ka]), vb = Number(b[ka]);
+    const wa = lowerWins ? va < vb : va > vb, wb = lowerWins ? vb < va : vb > va;
+    return `<tr><td>${label}</td><td class="num ${wa ? 'win' : ''}">${fmt(a[ka])}</td><td class="num ${wb ? 'win' : ''}">${fmt(b[ka])}</td></tr>`;
+  };
+  $('wiCompare').innerHTML = `
+    <h3>Side by side</h3>
+    <div class="scroll"><table class="cmp">
+      <thead><tr><th></th><th>${esc(a.name)}</th><th>${esc(b.name)}</th></tr></thead>
+      <tbody>
+        <tr><td>Change</td><td>${esc(a.description)}</td><td>${esc(b.description)}</td></tr>
+        ${row('Members affected', 'members_affected')}
+        ${row('Needed coverage lost', 'needed_coverage_lost')}
+        ${row('Cost right after', 'cost_after_change', inr2)}
+        ${row('Change vs today', 'cost_change', signed)}
+        ${row('After cheapest repair', 'repaired_cost', inr2)}
+        ${row('Repaired vs today', 'repaired_vs_today', signed)}
+        ${row('Repair steps', 'repair_steps')}
+      </tbody>
+    </table></div>
+    <div class="notice ${c.comparison.cheaper_after_repair === 'same' ? 'info' : 'ok'}">${c.comparison.cheaper_after_repair === 'same'
+      ? 'Both end up costing the same once repaired.'
+      : `“${esc(c.comparison[c.comparison.cheaper_after_repair].name)}” is cheaper once repaired, by ${inr2(Math.abs(c.comparison.difference))} a month.`}</div>`;
+}
+
+// ---------- needs ----------
+function serviceOptions(exclude) {
+  const seen = new Map();
+  for (const p of state.plans) if (!seen.has(p.service_id)) seen.set(p.service_id, p.service_name);
+  return [...seen].filter(([id]) => !exclude.has(id)).sort((x, y) => x[1].localeCompare(y[1]))
+    .map(([id, n]) => `<option value="${id}">${esc(n)}</option>`).join('');
+}
+
+function renderNeeds() {
+  $('needs').innerHTML = state.members.map(m => {
+    const mine = state.needs.filter(n => n.user_id === m.user_id);
+    const have = new Set(mine.map(n => n.service_id));
+    const rows = mine.map(n => n.is_needed ? `
+      <div class="need">
+        <div>
+          <div class="svc-line"><span>${esc(n.service_name)}</span><span class="badge src-${n.source}">${n.source}</span></div>
+          <div class="cov ${n.covered ? '' : 'no'}">${n.covered ? (n.depth > 0 ? 'covered via ' + esc(n.path_label) : 'covered by their own plan') : 'not covered by any plan'}</div>
+        </div>
+        <div class="nb">
+          ${n.source === 'manual' ? `<button class="link" data-reset="${n.service_id}" data-user="${m.user_id}">Reset to automatic</button>` : ''}
+          <button class="small" data-remove-need="${n.service_id}" data-user="${m.user_id}" title="They don't need this">Remove</button>
+        </div>
+      </div>` : `
+      <div class="need off">
+        <div><div class="svc-line"><span>${esc(n.service_name)}</span><span class="badge src-manual">not needed</span></div></div>
+        <div class="nb"><button class="link" data-reset="${n.service_id}" data-user="${m.user_id}">Reset to automatic</button></div>
+      </div>`).join('');
+    return `
+      <div class="needs-member">
+        <div class="who"><b>${esc(m.full_name)}</b><span class="hint">${mine.filter(n => n.is_needed).length} needs</span></div>
+        ${rows || '<div class="empty">No needs yet.</div>'}
+        <div class="need-add">
+          <select data-add-for="${m.user_id}" aria-label="Add a need for ${esc(first(m.full_name))}">${serviceOptions(have)}</select>
+          <button class="small" data-add-need="${m.user_id}">Add need</button>
+        </div>
+      </div>`;
+  }).join('') || '<div class="empty">Nobody in this household yet.</div>';
+
+  const base = `/households/${state.hid}/needs`;
+  $('needs').querySelectorAll('[data-add-need]').forEach(b => b.onclick = () => {
+    const sel = $('needs').querySelector(`[data-add-for="${b.dataset.addNeed}"]`);
+    act(() => api(base, { method: 'POST', body: JSON.stringify({ user_id: Number(b.dataset.addNeed), service_id: Number(sel.value) }) }), 'Need added');
+  });
+  $('needs').querySelectorAll('[data-remove-need]').forEach(b => b.onclick = () =>
+    act(() => api(`${base}/${b.dataset.user}/${b.dataset.removeNeed}`, { method: 'DELETE' }), 'Marked as not needed'));
+  $('needs').querySelectorAll('[data-reset]').forEach(b => b.onclick = () =>
+    act(() => api(`${base}/${b.dataset.user}/${b.dataset.reset}?reset=1`, { method: 'DELETE' }), 'Back to automatic'));
 }
 
 // ---------- subscriptions ----------
@@ -927,7 +1570,7 @@ $('addForm').onsubmit = (e) => {
 
 $('runBtn').onclick = async () => {
   $('runBtn').disabled = true;
-  await act(() => api(`/households/${state.hid}/alerts/refresh`, { method: 'POST' }), 'Optimizer re-ran');
+  await act(() => api(`/households/${state.hid}/alerts/refresh`, { method: 'POST' }), 'Findings refreshed');
   $('runBtn').disabled = false;
 };
 

@@ -65,7 +65,7 @@ router.get('/households/:id/entitlements', async (req, res, next) => {
     try {
         const { rows } = await pool.query(
             `SELECT d.subscription_id, d.service_name AS via_service, d.plan_name AS via_plan,
-                    d.payer_name, d.member_names, cl.depth, cl.path_label,
+                    d.payer_name, d.member_names, cl.depth, cl.path, cl.path_label,
                     s.name AS unlocked_service,
                     EXISTS (SELECT 1 FROM v_hidden_duplicates hd
                             WHERE hd.via_subscription_id = d.subscription_id
