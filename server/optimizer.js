@@ -91,6 +91,7 @@ function buildModel(input, opts = {}) {
                 payer: s.payer_id,
                 plan,
                 members: new Set(s.member_ids),
+                daysSinceLastUse: s.days_since_last_use == null ? null : s.days_since_last_use,
                 price: plan.price,
                 passive: services.get(plan.serviceId).isPassive,
             };
@@ -168,8 +169,9 @@ function buildModel(input, opts = {}) {
 
     const currentCost = subs.reduce((t, s) => t + s.price, 0);
     const currentValid = needs.every((n) => coveredBySubs(n.u, n.s));
+    const silent = new Set(input.silent_user_ids || []);
     return { input, users, services, plans, subs, needs, needsByUser, candidatesByService, uncovered,
-             unrepairable, currentCost, currentValid, limitOf };
+             unrepairable, currentCost, currentValid, limitOf, silent };
 }
 
 // ---------------------------------------------------------------------------
@@ -452,6 +454,7 @@ function buildSteps(model, config) {
     const first = (u) => model.users.get(u).split(' ')[0];
     const names = (ids) => humanList(ids.map(first));
     const svc = (plan) => model.services.get(plan.serviceId).name;
+    const anySilent = (members) => [...members].some((u) => model.silent.has(u));
 
     // payer of a new plan: whoever paid for the most expensive plan it replaces
     // (lowest subscription id on ties), otherwise its first member
@@ -476,6 +479,9 @@ function buildSteps(model, config) {
             switched.add(d.id);
             const downgrade = inst.plan.max < d.plan.max;
             steps.push({
+                // a downgrade rests on someone no longer using it: Medium at
+                // most, Low if anyone on it has gone silent
+                confidence: !downgrade ? 'High' : anySilent(d.members) ? 'Low' : 'Medium',
                 action: 'switch', subscription_id: d.id, plan_id: inst.plan.id, payer_id: inst.payer,
                 user_ids: inst.members, saving: d.price - inst.plan.price,
                 description: `Switch ${first(d.payer)}'s ${svc(d.plan)} from ${d.plan.name} to ${inst.plan.name} (${inr(inst.plan.price)}/mo)`,
@@ -488,6 +494,7 @@ function buildSteps(model, config) {
         }
         const coveredServices = [...new Set(dropped.filter((d) => links.get(d.id).includes(inst)).map((d) => svc(d.plan)))].sort();
         steps.push({
+            confidence: 'High',
             action: 'start', subscription_id: null, plan_id: inst.plan.id, payer_id: inst.payer,
             user_ids: inst.members, saving: -inst.plan.price,
             description: `Start ${svc(inst.plan)} ${inst.plan.name} (${inr(inst.plan.price)}/mo), paid by ${first(inst.payer)}`
@@ -502,6 +509,7 @@ function buildSteps(model, config) {
     for (const inst of config.filter((i) => i.sub && i.added.length).sort((a, b) => a.sub.id - b.sub.id)) {
         for (const u of inst.added) {
             steps.push({
+                confidence: 'High',
                 action: 'add_member', subscription_id: inst.sub.id, plan_id: null, payer_id: null,
                 user_ids: [u], saving: 0,
                 description: `Add ${first(u)} to ${first(inst.sub.payer)}'s ${svc(inst.plan)} ${inst.plan.name}`,
@@ -532,7 +540,14 @@ function buildSteps(model, config) {
         } else {
             reason = `Nobody on it has used ${svc(d.plan)} in the last 30 days`;
         }
+        // covered elsewhere: High. Unused: High after 60 days, Medium before,
+        // Low if anyone on it has logged nothing at all for 45+ days (FR-40),
+        // the same rules as the waste finding's evidence
+        const confidence = needers.length ? 'High'
+            : anySilent(d.members) ? 'Low'
+            : d.daysSinceLastUse == null || d.daysSinceLastUse >= 60 ? 'High' : 'Medium';
         steps.push({
+            confidence,
             action: 'cancel', subscription_id: d.id, plan_id: null, payer_id: null, user_ids: [],
             saving: d.price,
             description: `Cancel ${first(d.payer)}'s ${svc(d.plan)} (${d.plan.name}), ${inr(d.price)}/mo`,
@@ -665,6 +680,8 @@ function optimize(input, opts = {}) {
         cost_before: rupees(model.currentCost),
         cost_after: rupees(costAfter),
         saving: rupees(model.currentCost - costAfter),
+        // FR-41: only High and Medium steps count toward the saving shown
+        counted_saving: rupees(steps.filter((s) => s.confidence !== 'Low').reduce((t, s) => t + s.saving, 0)),
         is_optimal: optimal,
         elapsed_ms: Date.now() - started,
         nodes,

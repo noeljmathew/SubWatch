@@ -42,10 +42,10 @@ async function evaluate(client, householdId, change, scenarioName = null) {
     for (const s of result.repair.steps) {
         await client.query(
             `INSERT INTO optimization_steps (run_id, step_no, action, subscription_id, plan_id, payer_id,
-                                             user_ids, saving, description, reason, reason_path)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                                             user_ids, saving, description, reason, reason_path, confidence)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
             [run.run_id, s.step_no, s.action, s.subscription_id, s.plan_id, s.payer_id,
-             s.user_ids, s.saving, s.description, s.reason, s.reason_path]);
+             s.user_ids, s.saving, s.description, s.reason, s.reason_path, s.confidence]);
     }
 
     const { _changed, _required, ...visible } = result;
