@@ -1,0 +1,30 @@
+subscription_id,household,payer_name,service_name,plan_name,status,monthly_price,member_count,members
+1,Sharma Household,Arjun Sharma,Airtel Postpaid,Family 1199,active,1199.00,3,Arjun Sharma; Meera Sharma; Priya Sharma
+2,Sharma Household,Priya Sharma,Prime Video,Mobile Edition,active,49.92,1,Priya Sharma
+3,Sharma Household,Meera Sharma,Amazon Prime,Annual,active,124.92,1,Meera Sharma
+4,Sharma Household,Priya Sharma,YouTube Premium,Family,active,299.00,2,Dev Sharma; Priya Sharma
+5,Sharma Household,Dev Sharma,YouTube Music,Individual,active,119.00,1,Dev Sharma
+6,Sharma Household,Arjun Sharma,Spotify,Individual,active,119.00,1,Arjun Sharma
+7,Sharma Household,Meera Sharma,Spotify,Individual,active,119.00,1,Meera Sharma
+8,Sharma Household,Dev Sharma,Spotify,Student,active,59.00,1,Dev Sharma
+9,Sharma Household,Priya Sharma,Netflix,Premium,active,649.00,4,Arjun Sharma; Dev Sharma; Meera Sharma; Priya Sharma
+10,Sharma Household,Dev Sharma,JioHotstar,Super,active,99.67,2,Arjun Sharma; Dev Sharma
+11,Sharma Household,Arjun Sharma,Audible,Monthly,active,199.00,1,Arjun Sharma
+12,Hostel Room A-412,Rahul Verma,YouTube Premium,Individual,active,149.00,1,Rahul Verma
+13,Hostel Room A-412,Karthik Nair,YouTube Premium,Individual,active,149.00,1,Karthik Nair
+14,Hostel Room A-412,Aditya Rao,YouTube Premium,Student,active,89.00,1,Aditya Rao
+15,Hostel Room A-412,Karthik Nair,Spotify,Duo,active,149.00,1,Karthik Nair
+16,Hostel Room A-412,Aditya Rao,Spotify,Individual,active,119.00,1,Aditya Rao
+17,Hostel Room A-412,Rahul Verma,Apple Music,Individual,active,99.00,1,Rahul Verma
+18,Hostel Room A-412,Rahul Verma,iCloud+,50 GB,active,75.00,1,Rahul Verma
+19,Hostel Room A-412,Rahul Verma,Apple TV+,Monthly,active,99.00,1,Rahul Verma
+20,Hostel Room A-412,Karthik Nair,Netflix,Mobile,active,149.00,1,Karthik Nair
+21,Hostel Room A-412,Aditya Rao,JioHotstar,Mobile,active,49.67,1,Aditya Rao
+22,Iyer Residence,Vikram Iyer,Jio Postpaid,Plus 699,active,699.00,2,Ananya Iyer; Vikram Iyer
+23,Iyer Residence,Ananya Iyer,Netflix,Basic,active,199.00,1,Ananya Iyer
+24,Iyer Residence,Ananya Iyer,Spotify,Individual,active,119.00,1,Ananya Iyer
+25,Iyer Residence,Vikram Iyer,Spotify,Individual,active,119.00,1,Vikram Iyer
+26,Iyer Residence,Vikram Iyer,LinkedIn Premium,Career,active,1500.00,1,Vikram Iyer
+27,Iyer Residence,Ananya Iyer,Google One,100 GB,active,130.00,2,Ananya Iyer; Vikram Iyer
+28,Iyer Residence,Ananya Iyer,Audible,Monthly,active,199.00,1,Ananya Iyer
+29,Iyer Residence,Vikram Iyer,Amazon Prime,Monthly,cancelled,299.00,1,Vikram Iyer

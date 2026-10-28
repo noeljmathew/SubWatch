@@ -1,0 +1,43 @@
+plan_id,service,plan,tier,price,billing_cycle,max_members,is_purchasable,monthly_price
+1,Apple TV+,Included with Apple One,included,0.00,monthly,1,f,0.00
+2,Apple TV+,Monthly,individual,99.00,monthly,1,t,99.00
+3,YouTube Premium,Family,family,299.00,monthly,5,t,299.00
+4,YouTube Premium,Student,student,89.00,monthly,1,t,89.00
+5,YouTube Premium,Individual,individual,149.00,monthly,1,t,149.00
+6,Prime Video,Included with Prime,included,0.00,monthly,1,f,0.00
+7,Prime Video,Mobile Edition,individual,599.00,yearly,1,t,49.92
+8,JioHotstar,Included,included,0.00,monthly,1,f,0.00
+9,JioHotstar,Premium,family,499.00,quarterly,4,t,166.33
+10,JioHotstar,Super,duo,299.00,quarterly,2,t,99.67
+11,JioHotstar,Mobile,individual,149.00,quarterly,1,t,49.67
+12,Netflix,Basic (included),included,0.00,monthly,1,f,0.00
+13,Netflix,Premium,family,649.00,monthly,4,t,649.00
+14,Netflix,Standard,duo,499.00,monthly,2,t,499.00
+15,Netflix,Basic,individual,199.00,monthly,1,t,199.00
+16,Netflix,Mobile,individual,149.00,monthly,1,t,149.00
+17,Amazon Music,Included with Prime,included,0.00,monthly,1,f,0.00
+18,Apple Music,Included with Apple One,included,0.00,monthly,1,f,0.00
+19,Apple Music,Family,family,149.00,monthly,6,t,149.00
+20,Apple Music,Student,student,59.00,monthly,1,t,59.00
+21,Apple Music,Individual,individual,99.00,monthly,1,t,99.00
+22,YouTube Music,Included with YT Premium,included,0.00,monthly,1,f,0.00
+23,YouTube Music,Family,family,179.00,monthly,5,t,179.00
+24,YouTube Music,Individual,individual,119.00,monthly,1,t,119.00
+25,Spotify,Family,family,179.00,monthly,6,t,179.00
+26,Spotify,Duo,duo,149.00,monthly,2,t,149.00
+27,Spotify,Student,student,59.00,monthly,1,t,59.00
+28,Spotify,Individual,individual,119.00,monthly,1,t,119.00
+29,Apple One,Family,family,365.00,monthly,6,t,365.00
+30,Apple One,Individual,individual,195.00,monthly,1,t,195.00
+31,Amazon Prime,Included,included,0.00,monthly,1,f,0.00
+32,Amazon Prime,Monthly,duo,299.00,monthly,2,t,299.00
+33,Amazon Prime,Annual,duo,1499.00,yearly,2,t,124.92
+34,Audible,Monthly,individual,199.00,monthly,1,t,199.00
+35,LinkedIn Premium,Career,individual,1500.00,monthly,1,t,1500.00
+36,Google One,100 GB,family,130.00,monthly,5,t,130.00
+37,iCloud+,50 GB (included),included,0.00,monthly,1,f,0.00
+38,iCloud+,200 GB,family,219.00,monthly,6,t,219.00
+39,iCloud+,50 GB,individual,75.00,monthly,1,t,75.00
+40,Jio Postpaid,Plus 699,family,699.00,monthly,4,t,699.00
+41,Airtel Postpaid,Family 1199,family,1199.00,monthly,4,t,1199.00
+42,Airtel Postpaid,Individual 449,individual,449.00,monthly,1,t,449.00

@@ -1,0 +1,15 @@
+household,subscription_id,via_service,via_plan,payer_name,member_names,depth,path_label,unlocked_service,also_paid_separately
+Sharma Household,1,Airtel Postpaid,Family 1199,Arjun Sharma,"Arjun Sharma, Meera Sharma, Priya Sharma",1,Airtel Postpaid (Family 1199) → Amazon Prime,Amazon Prime,t
+Sharma Household,1,Airtel Postpaid,Family 1199,Arjun Sharma,"Arjun Sharma, Meera Sharma, Priya Sharma",2,Airtel Postpaid (Family 1199) → Amazon Prime → Amazon Music,Amazon Music,f
+Sharma Household,1,Airtel Postpaid,Family 1199,Arjun Sharma,"Arjun Sharma, Meera Sharma, Priya Sharma",2,Airtel Postpaid (Family 1199) → Amazon Prime → Prime Video,Prime Video,t
+Sharma Household,3,Amazon Prime,Annual,Meera Sharma,Meera Sharma,1,Amazon Prime (Annual) → Amazon Music,Amazon Music,f
+Sharma Household,3,Amazon Prime,Annual,Meera Sharma,Meera Sharma,1,Amazon Prime (Annual) → Prime Video,Prime Video,f
+Sharma Household,4,YouTube Premium,Family,Priya Sharma,"Dev Sharma, Priya Sharma",1,YouTube Premium (Family) → YouTube Music,YouTube Music,t
+Hostel Room A-412,12,YouTube Premium,Individual,Rahul Verma,Rahul Verma,1,YouTube Premium (Individual) → YouTube Music,YouTube Music,f
+Hostel Room A-412,13,YouTube Premium,Individual,Karthik Nair,Karthik Nair,1,YouTube Premium (Individual) → YouTube Music,YouTube Music,f
+Hostel Room A-412,14,YouTube Premium,Student,Aditya Rao,Aditya Rao,1,YouTube Premium (Student) → YouTube Music,YouTube Music,f
+Iyer Residence,22,Jio Postpaid,Plus 699,Vikram Iyer,"Ananya Iyer, Vikram Iyer",1,Jio Postpaid (Plus 699) → Amazon Prime,Amazon Prime,f
+Iyer Residence,22,Jio Postpaid,Plus 699,Vikram Iyer,"Ananya Iyer, Vikram Iyer",1,Jio Postpaid (Plus 699) → JioHotstar,JioHotstar,f
+Iyer Residence,22,Jio Postpaid,Plus 699,Vikram Iyer,"Ananya Iyer, Vikram Iyer",1,Jio Postpaid (Plus 699) → Netflix,Netflix,t
+Iyer Residence,22,Jio Postpaid,Plus 699,Vikram Iyer,"Ananya Iyer, Vikram Iyer",2,Jio Postpaid (Plus 699) → Amazon Prime → Amazon Music,Amazon Music,f
+Iyer Residence,22,Jio Postpaid,Plus 699,Vikram Iyer,"Ananya Iyer, Vikram Iyer",2,Jio Postpaid (Plus 699) → Amazon Prime → Prime Video,Prime Video,f

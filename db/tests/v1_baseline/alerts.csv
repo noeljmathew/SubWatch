@@ -1,0 +1,16 @@
+household,alert_type,fingerprint,recommended_plan,potential_monthly_savings,subject_ids,source_ids
+Sharma Household,churn_risk,churn:10,,99.67,{10},{}
+Sharma Household,consolidation,consolidate:9,Spotify Family,118.00,"{6,7,8}",{}
+Sharma Household,hidden_duplicate,dup:2,,49.92,{2},{1}
+Sharma Household,hidden_duplicate,dup:3,,124.92,{3},{1}
+Sharma Household,hidden_duplicate,dup:5,,119.00,{5},{4}
+Sharma Household,overlap,overlap:1,,99.67,{10},{}
+Sharma Household,waste,waste:11,,199.00,{11},{}
+Hostel Room A-412,bundle,bundle:30,Apple One Individual,78.00,"{17,18,19}",{}
+Hostel Room A-412,churn_risk,churn:21,,49.67,{21},{}
+Hostel Room A-412,consolidation,consolidate:2,YouTube Premium Family,88.00,"{12,13,14}",{}
+Hostel Room A-412,overlap,overlap:1,,49.67,{21},{}
+Hostel Room A-412,spare_capacity,spare:16:15,,119.00,{16},{15}
+Iyer Residence,consolidation,consolidate:9,Spotify Duo,89.00,"{24,25}",{}
+Iyer Residence,hidden_duplicate,dup:23,,199.00,{23},{22}
+Iyer Residence,waste,waste:26,,1500.00,{26},{}
