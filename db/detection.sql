@@ -571,14 +571,18 @@ JOIN users u ON u.user_id = hm.user_id;
 -- ---------------------------------------------------------------------------
 -- renewal_forecast — every charge coming up in the next p_days days. Each
 -- renewal is computed from start_date + n * cycle (not by repeatedly adding a
--- month), so a plan that started on the 31st doesn't drift.
+-- month), so a plan that started on the 31st doesn't drift. Each charge is
+-- priced at the plan's price on its renewal date (FR-37), so a price change
+-- already on the books shows up from the first renewal after it.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION renewal_forecast(p_household_id INT, p_days INT DEFAULT 30)
 RETURNS TABLE (renewal_date DATE, subscription_id INT, service_name TEXT, plan_name TEXT,
                payer_name TEXT, billing_cycle TEXT, amount NUMERIC)
-LANGUAGE sql STABLE AS $$
+LANGUAGE sql STABLE
+SET jit = off
+AS $$
     SELECT r.renewal_date, d.subscription_id, d.service_name::text, d.plan_name::text,
-           d.payer_name::text, d.billing_cycle::text, d.price
+           d.payer_name::text, d.billing_cycle::text, ph.price
     FROM v_subscription_detail d
     CROSS JOIN LATERAL (SELECT CASE d.billing_cycle
                                    WHEN 'weekly'    THEN interval '1 week'
@@ -588,10 +592,11 @@ LANGUAGE sql STABLE AS $$
                                END AS step) c
     CROSS JOIN LATERAL generate_series(1, 600) AS g(n)
     CROSS JOIN LATERAL (SELECT (d.start_date + g.n * c.step)::date AS renewal_date) r
+    LEFT JOIN plan_price_history ph ON ph.plan_id = d.plan_id AND ph.valid_during @> r.renewal_date
     WHERE d.household_id = p_household_id
       AND d.status = 'active'
       AND r.renewal_date BETWEEN CURRENT_DATE AND CURRENT_DATE + p_days
-    ORDER BY r.renewal_date, d.price DESC
+    ORDER BY r.renewal_date, ph.price DESC
 $$;
 
 -- ---------------------------------------------------------------------------

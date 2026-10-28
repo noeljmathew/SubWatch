@@ -82,9 +82,9 @@ SELECT pg_temp.check(
       WHERE n.nspname = 'public'
         AND p.proname IN ('monthly_equivalent','plans_at','entitlements_at','check_plan_price',
                           'household_spend_at','path_label','entitlement_closure_at',
-                          'refresh_member_needs','set_member_need')
-        AND 'jit=off' = ANY (p.proconfig)) = 9,
-    'all 9 new v2a functions/procedures run with jit = off');
+                          'refresh_member_needs','set_member_need','renewal_forecast')
+        AND 'jit=off' = ANY (p.proconfig)) = 10,
+    'all 10 new or changed v2a functions/procedures run with jit = off');
 
 -- ---------------------------------------------------------------------------
 \echo '--- FR-38: reason paths match v1'
@@ -209,6 +209,20 @@ SELECT pg_temp.expect_error(
     $$INSERT INTO plan_price_history (plan_id, price, valid_from, valid_to)
       SELECT plan_id, 10, CURRENT_DATE + 1000, CURRENT_DATE + 1000 FROM plan_catalog WHERE tier <> 'included' LIMIT 1$$,
     '23514', 'empty price range (valid_to = valid_from)');
+
+-- the forecast prices each renewal at the price valid on that date
+SAVEPOINT t;
+UPDATE plan_price_history SET valid_to = CURRENT_DATE + 1
+ WHERE valid_to IS NULL
+   AND plan_id = (SELECT plan_id FROM plan_catalog WHERE name = 'Premium' AND service_id = pg_temp.sid('Netflix'));
+INSERT INTO plan_price_history (plan_id, price, valid_from)
+SELECT plan_id, 699, CURRENT_DATE + 1 FROM plan_catalog WHERE name = 'Premium' AND service_id = pg_temp.sid('Netflix');
+SELECT pg_temp.check(
+    EXISTS (SELECT 1 FROM renewal_forecast(1, 31) WHERE service_name = 'Netflix')
+    AND NOT EXISTS (SELECT 1 FROM renewal_forecast(1, 31) WHERE service_name = 'Netflix'
+                     AND amount <> CASE WHEN renewal_date >= CURRENT_DATE + 1 THEN 699 ELSE 649 END),
+    'renewal_forecast uses the price valid on each renewal date');
+ROLLBACK TO SAVEPOINT t;
 
 SAVEPOINT t;
 INSERT INTO plan_catalog (service_id, name, tier) VALUES (pg_temp.sid('Netflix'), 'Unpriced test plan', 'individual');

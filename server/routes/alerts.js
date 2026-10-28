@@ -13,7 +13,13 @@ router.get('/households/:id/alerts', async (req, res, next) => {
                               WHERE x.alert_id = a.alert_id AND x.role = 'subject'), '{}') AS subject_ids,
                     COALESCE((SELECT array_agg(x.subscription_id ORDER BY x.subscription_id)
                               FROM alert_subscriptions x
-                              WHERE x.alert_id = a.alert_id AND x.role = 'source'), '{}') AS source_ids
+                              WHERE x.alert_id = a.alert_id AND x.role = 'source'), '{}') AS source_ids,
+                    COALESCE((SELECT json_agg(json_build_object(
+                                  'subscription_id', r.subscription_id, 'role', r.role,
+                                  'reason_path', r.reason_path, 'reason_label', r.reason_label,
+                                  'member_ids', r.member_ids, 'member_names', r.member_names)
+                              ORDER BY r.role DESC, r.subscription_id)
+                              FROM v_alert_reasons r WHERE r.alert_id = a.alert_id), '[]') AS reasons
              FROM alerts a
              LEFT JOIN plans p     ON p.plan_id = a.recommended_plan_id
              LEFT JOIN services sv ON sv.service_id = p.service_id
