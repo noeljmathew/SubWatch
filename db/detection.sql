@@ -1193,6 +1193,126 @@ AS $$
     SELECT md5(optimizer_input(p_household_id, p_date)::text)
 $$;
 
+-- ---------------------------------------------------------------------------
+-- apply_optimization — carry out an optimizer run's steps (FR-33), the same
+-- way apply_alert carries out one finding. The API calls it two ways:
+--   preview: BEGIN; SELECT apply_optimization(id); <read new totals>; ROLLBACK;
+--   apply:   BEGIN; SELECT apply_optimization(id); COMMIT;
+-- Locks: the household lock first (lock_household), then the run row FOR
+-- UPDATE, so a run is applied at most once.
+-- If the household changed since the run was computed (state_hash), nothing
+-- is applied: the run is marked stale and NULL is returned.
+-- Every insert goes through the normal triggers (capacity, household, payer).
+-- After the steps it checks, and raises (rolling everything back) if not:
+--   * every need that was covered before is still covered
+--   * every member of a cancelled passive subscription still reaches it
+--   * the household now costs exactly the run's cost_after
+-- Returns the steps it took, in plain English.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION apply_optimization(p_run_id INT) RETURNS TEXT[]
+LANGUAGE plpgsql
+SET jit = off
+AS $$
+DECLARE
+    r          optimization_runs%ROWTYPE;
+    st         RECORD;
+    v_hh       INT;
+    v_new      INT;
+    u          INT;
+    v_cost     NUMERIC;
+    v_open     TEXT[];
+    v_lost     TEXT;
+    steps      TEXT[] := '{}';
+BEGIN
+    SELECT household_id INTO v_hh FROM optimization_runs WHERE run_id = p_run_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Optimizer run % does not exist', p_run_id USING ERRCODE = 'check_violation';
+    END IF;
+    PERFORM lock_household(v_hh);                      -- household lock first, then the row
+    SELECT * INTO r FROM optimization_runs WHERE run_id = p_run_id FOR UPDATE;
+    IF r.status <> 'proposed' THEN
+        RAISE EXCEPTION 'This optimizer run was already %', r.status USING ERRCODE = 'check_violation';
+    END IF;
+    IF optimizer_state_hash(v_hh, r.evaluated_on) <> r.state_hash THEN
+        UPDATE optimization_runs SET status = 'stale' WHERE run_id = p_run_id;
+        RETURN NULL;
+    END IF;
+
+    -- needs nothing covers even now: the run doesn't have to cover these
+    SELECT COALESCE(array_agg(user_id || ':' || service_id), '{}') INTO v_open
+      FROM v_need_coverage WHERE household_id = v_hh AND NOT covered;
+
+    FOR st IN SELECT * FROM optimization_steps WHERE run_id = p_run_id ORDER BY step_no LOOP
+        IF st.action IN ('start', 'switch') THEN
+            INSERT INTO subscriptions (payer_id, plan_id, start_date)
+            VALUES (st.payer_id, st.plan_id, CURRENT_DATE)
+            RETURNING subscription_id INTO v_new;
+            FOREACH u IN ARRAY st.user_ids LOOP
+                IF u <> st.payer_id THEN
+                    INSERT INTO subscription_members (subscription_id, user_id) VALUES (v_new, u);
+                END IF;
+            END LOOP;
+        ELSIF st.action = 'add_member' THEN
+            INSERT INTO subscription_members (subscription_id, user_id) VALUES (st.subscription_id, st.user_ids[1]);
+        END IF;
+
+        IF st.action IN ('switch', 'cancel') THEN
+            UPDATE subscriptions
+               SET status = 'cancelled', end_date = GREATEST(CURRENT_DATE, start_date)
+             WHERE subscription_id = st.subscription_id AND status = 'active';
+            IF NOT FOUND THEN
+                RAISE EXCEPTION 'Step %: subscription % is no longer active', st.step_no, st.subscription_id
+                    USING ERRCODE = 'check_violation';
+            END IF;
+        END IF;
+        steps := steps || st.description;
+    END LOOP;
+
+    -- checked against member_needs as it was before the change, so a passive
+    -- need can't quietly disappear along with its subscription
+    SELECT string_agg(u2.full_name || ' / ' || sv.name, ', ') INTO v_lost
+      FROM v_need_coverage nc
+      JOIN users u2    ON u2.user_id = nc.user_id
+      JOIN services sv ON sv.service_id = nc.service_id
+     WHERE nc.household_id = v_hh AND NOT nc.covered
+       AND NOT (nc.user_id || ':' || nc.service_id) = ANY (v_open);
+    IF v_lost IS NOT NULL THEN
+        RAISE EXCEPTION 'Applying run % would leave needs uncovered: %', p_run_id, v_lost
+            USING ERRCODE = 'check_violation';
+    END IF;
+
+    SELECT string_agg(u2.full_name || ' / ' || sv.name, ', ') INTO v_lost
+      FROM optimization_steps os
+      JOIN subscriptions s         ON s.subscription_id = os.subscription_id
+      JOIN plan_catalog p          ON p.plan_id = s.plan_id
+      JOIN services sv             ON sv.service_id = p.service_id
+      JOIN categories c            ON c.category_id = sv.category_id
+      JOIN subscription_members sm ON sm.subscription_id = s.subscription_id
+      JOIN users u2                ON u2.user_id = sm.user_id
+     WHERE os.run_id = p_run_id AND os.action IN ('switch', 'cancel') AND c.is_passive
+       AND NOT EXISTS (SELECT 1 FROM v_member_coverage mc
+                       WHERE mc.user_id = sm.user_id AND mc.service_id = p.service_id);
+    IF v_lost IS NOT NULL THEN
+        RAISE EXCEPTION 'Applying run % would cancel a passive service outright: %', p_run_id, v_lost
+            USING ERRCODE = 'check_violation';
+    END IF;
+
+    SELECT COALESCE(SUM(p.monthly_price), 0) INTO v_cost
+      FROM subscriptions s
+      JOIN household_members hm           ON hm.user_id = s.payer_id
+      JOIN plans_at(r.evaluated_on) p     ON p.plan_id = s.plan_id
+     WHERE hm.household_id = v_hh AND s.status = 'active';
+    IF v_cost <> r.cost_after THEN
+        RAISE EXCEPTION 'Applying run % costs % a month, not the % it promised', p_run_id, v_cost, r.cost_after
+            USING ERRCODE = 'check_violation';
+    END IF;
+
+    UPDATE optimization_runs SET status = 'applied', applied_at = now() WHERE run_id = p_run_id;
+    CALL refresh_alerts(v_hh);
+    RETURN steps;
+END;
+$$;
+
 -- ============================================================================
 -- Bank statement import — find recurring charges in raw transactions
 -- ============================================================================

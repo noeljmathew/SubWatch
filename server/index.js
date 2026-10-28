@@ -16,6 +16,7 @@ app.use('/api', require('./routes/insights'));
 app.use('/api', require('./routes/catalog'));
 app.use('/api', require('./routes/imports'));
 app.use('/api', require('./routes/needs'));
+app.use('/api', require('./routes/optimizer'));
 
 app.get('/api/health', async (req, res) => {
     try {
