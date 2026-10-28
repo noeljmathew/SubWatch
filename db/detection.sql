@@ -103,39 +103,101 @@ LEFT JOIN member_stats ms ON ms.subscription_id = s.subscription_id
 LEFT JOIN usage_stats us  ON us.subscription_id = s.subscription_id;
 
 -- ---------------------------------------------------------------------------
--- v_entitlement_closure — transitive closure of the entitlement graph.
--- Every (root plan, plan it ultimately unlocks) pair, with depth and a
--- readable path. The path array also prevents infinite loops on cycles.
+-- path_label — a path of plan ids as text: the first plan with its plan
+-- name, the rest by service: 'Airtel Postpaid (Family 1199) → Amazon Prime
+-- → Prime Video'. Used for every reason path (FR-38).
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE VIEW v_entitlement_closure AS
+CREATE OR REPLACE FUNCTION path_label(p_path INT[]) RETURNS TEXT
+LANGUAGE sql STABLE
+SET jit = off
+AS $$
+    SELECT STRING_AGG(CASE WHEN x.ord = 1 THEN xs.name || ' (' || xp.name || ')' ELSE xs.name END,
+                      ' → ' ORDER BY x.ord)
+    FROM UNNEST(p_path) WITH ORDINALITY AS x(plan_id, ord)
+    JOIN plan_catalog xp ON xp.plan_id = x.plan_id
+    JOIN services xs     ON xs.service_id = xp.service_id
+$$;
+
+-- ---------------------------------------------------------------------------
+-- v_inclusion_closure — transitive closure of the entitlement graph over
+-- time. Every (root plan, plan it ultimately unlocks) pair, with depth, the
+-- path, and the dates the whole path is valid: the intersection (*) of every
+-- edge's range along it. A path whose edges were never valid at the same time
+-- is pruned (&&). The path array also prevents infinite loops on cycles.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE VIEW v_inclusion_closure AS
 WITH RECURSIVE walk AS (
-    SELECT e.plan_id AS root_plan_id,
-           e.included_plan_id,
+    SELECT h.parent_plan_id AS root_plan_id,
+           h.included_plan_id,
            1 AS depth,
-           ARRAY[e.plan_id, e.included_plan_id] AS path
-    FROM entitlements e
+           ARRAY[h.parent_plan_id, h.included_plan_id] AS path,
+           h.valid_during
+    FROM plan_inclusion_history h
     UNION ALL
     SELECT w.root_plan_id,
-           e.included_plan_id,
+           h.included_plan_id,
            w.depth + 1,
-           w.path || e.included_plan_id
+           w.path || h.included_plan_id,
+           w.valid_during * h.valid_during
     FROM walk w
-    JOIN entitlements e ON e.plan_id = w.included_plan_id
-    WHERE e.included_plan_id <> ALL (w.path)
+    JOIN plan_inclusion_history h ON h.parent_plan_id = w.included_plan_id
+    WHERE h.included_plan_id <> ALL (w.path)
+      AND h.valid_during && w.valid_during
 )
-SELECT
-    w.root_plan_id,
-    w.included_plan_id,
-    ip.service_id AS included_service_id,
-    w.depth,
-    w.path,
-    (SELECT STRING_AGG(CASE WHEN x.ord = 1 THEN xs.name || ' (' || xp.name || ')' ELSE xs.name END,
-                       ' → ' ORDER BY x.ord)
-       FROM UNNEST(w.path) WITH ORDINALITY AS x(plan_id, ord)
-       JOIN plans xp    ON xp.plan_id = x.plan_id
-       JOIN services xs ON xs.service_id = xp.service_id) AS path_label
+SELECT w.root_plan_id, w.included_plan_id, ip.service_id AS included_service_id,
+       w.depth, w.path, w.valid_during
 FROM walk w
-JOIN plans ip ON ip.plan_id = w.included_plan_id;
+JOIN plan_catalog ip ON ip.plan_id = w.included_plan_id;
+
+-- ---------------------------------------------------------------------------
+-- v_entitlement_closure — the closure as it is today (what v1 walked), with a
+-- readable path. entitlement_closure_at() is the same for any other date.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE VIEW v_entitlement_closure AS
+SELECT root_plan_id, included_plan_id, included_service_id, depth, path,
+       path_label(path) AS path_label
+FROM v_inclusion_closure
+WHERE valid_during @> CURRENT_DATE;
+
+CREATE OR REPLACE FUNCTION entitlement_closure_at(p_date DATE)
+RETURNS TABLE (root_plan_id INT, included_plan_id INT, included_service_id INT,
+               depth INT, path INT[], path_label TEXT)
+LANGUAGE sql STABLE
+SET jit = off
+AS $$
+    SELECT root_plan_id, included_plan_id, included_service_id, depth, path, path_label(path)
+    FROM v_inclusion_closure
+    WHERE valid_during @> p_date
+$$;
+
+-- ---------------------------------------------------------------------------
+-- v_plan_coverage — every service a purchasable plan gives access to today:
+-- its own service (depth 0) plus everything it reaches through included
+-- plans at any depth. The one traversal behind hidden duplicates, bundles,
+-- member coverage and (v2b) the optimizer's candidate expansion.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE VIEW v_plan_coverage AS
+SELECT p.plan_id, p.service_id, 0 AS depth, ARRAY[p.plan_id] AS path,
+       path_label(ARRAY[p.plan_id]) AS path_label
+FROM plan_catalog p
+WHERE p.is_purchasable
+UNION ALL
+SELECT root_plan_id, included_service_id, depth, path, path_label
+FROM v_entitlement_closure;
+
+-- ---------------------------------------------------------------------------
+-- v_member_coverage — who can use which service today, and through which
+-- active subscription: one row per (member, subscription, service reached).
+-- A member reaching a service through two subscriptions gets two rows.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE VIEW v_member_coverage AS
+SELECT hm.household_id, sm.user_id, pc.service_id,
+       s.subscription_id, s.plan_id, pc.depth, pc.path, pc.path_label
+FROM subscriptions s
+JOIN household_members hm    ON hm.user_id = s.payer_id
+JOIN subscription_members sm ON sm.subscription_id = s.subscription_id
+JOIN v_plan_coverage pc      ON pc.plan_id = s.plan_id
+WHERE s.status = 'active';
 
 -- ---------------------------------------------------------------------------
 -- v_hidden_duplicates — an active subscription is redundant if another active
@@ -149,14 +211,6 @@ JOIN plans ip ON ip.plan_id = w.included_plan_id;
 -- When several subscriptions explain it, the shortest path wins.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE VIEW v_hidden_duplicates AS
-WITH coverage AS (
-    SELECT root_plan_id AS plan_id, included_service_id AS service_id, depth, path_label
-    FROM v_entitlement_closure
-    UNION ALL
-    SELECT p.plan_id, p.service_id, 0, s.name || ' (' || p.name || ')'
-    FROM plans p JOIN services s ON s.service_id = p.service_id
-    WHERE p.is_purchasable
-)
 SELECT DISTINCT ON (dup.subscription_id)
     dup.household_id,
     dup.subscription_id,
@@ -171,13 +225,14 @@ SELECT DISTINCT ON (dup.subscription_id)
     cl.depth,
     cl.path_label,
     dup.payer_id,
-    src.payer_id        AS via_payer_id
+    src.payer_id        AS via_payer_id,
+    cl.path
 FROM v_subscription_detail dup
 JOIN v_subscription_detail src
     ON  src.household_id = dup.household_id
     AND src.subscription_id <> dup.subscription_id
     AND src.status = 'active'
-JOIN coverage cl
+JOIN v_plan_coverage cl
     ON  cl.plan_id = src.plan_id
     AND cl.service_id = dup.service_id
 WHERE dup.status = 'active'
@@ -273,9 +328,9 @@ ORDER BY single.subscription_id, host.max_members - host.member_count DESC;
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE VIEW v_bundle_opportunities AS
 WITH bundle_services AS (
-    SELECT DISTINCT p.plan_id, cl.included_service_id AS service_id
+    SELECT DISTINCT p.plan_id, cl.service_id
     FROM plans p
-    JOIN v_entitlement_closure cl ON cl.root_plan_id = p.plan_id
+    JOIN v_plan_coverage cl ON cl.plan_id = p.plan_id AND cl.depth > 0
     JOIN services s   ON s.service_id = p.service_id
     JOIN categories c ON c.category_id = s.category_id
     WHERE p.is_purchasable AND NOT c.is_passive
@@ -516,14 +571,18 @@ JOIN users u ON u.user_id = hm.user_id;
 -- ---------------------------------------------------------------------------
 -- renewal_forecast — every charge coming up in the next p_days days. Each
 -- renewal is computed from start_date + n * cycle (not by repeatedly adding a
--- month), so a plan that started on the 31st doesn't drift.
+-- month), so a plan that started on the 31st doesn't drift. Each charge is
+-- priced at the plan's price on its renewal date (FR-37), so a price change
+-- already on the books shows up from the first renewal after it.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION renewal_forecast(p_household_id INT, p_days INT DEFAULT 30)
 RETURNS TABLE (renewal_date DATE, subscription_id INT, service_name TEXT, plan_name TEXT,
                payer_name TEXT, billing_cycle TEXT, amount NUMERIC)
-LANGUAGE sql STABLE AS $$
+LANGUAGE sql STABLE
+SET jit = off
+AS $$
     SELECT r.renewal_date, d.subscription_id, d.service_name::text, d.plan_name::text,
-           d.payer_name::text, d.billing_cycle::text, d.price
+           d.payer_name::text, d.billing_cycle::text, ph.price
     FROM v_subscription_detail d
     CROSS JOIN LATERAL (SELECT CASE d.billing_cycle
                                    WHEN 'weekly'    THEN interval '1 week'
@@ -533,15 +592,39 @@ LANGUAGE sql STABLE AS $$
                                END AS step) c
     CROSS JOIN LATERAL generate_series(1, 600) AS g(n)
     CROSS JOIN LATERAL (SELECT (d.start_date + g.n * c.step)::date AS renewal_date) r
+    LEFT JOIN plan_price_history ph ON ph.plan_id = d.plan_id AND ph.valid_during @> r.renewal_date
     WHERE d.household_id = p_household_id
       AND d.status = 'active'
       AND r.renewal_date BETWEEN CURRENT_DATE AND CURRENT_DATE + p_days
-    ORDER BY r.renewal_date, d.price DESC
+    ORDER BY r.renewal_date, ph.price DESC
+$$;
+
+-- ---------------------------------------------------------------------------
+-- household_spend_at — what a household's subscriptions cost per month on
+-- p_date, at the prices valid that day (FR-37). A subscription counts if it
+-- had started and not yet ended then (cancelling sets end_date). Paused ones
+-- don't count, as in v1.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION household_spend_at(p_household_id INT, p_date DATE)
+RETURNS NUMERIC
+LANGUAGE sql STABLE
+SET jit = off
+AS $$
+    SELECT COALESCE(SUM(p.monthly_price), 0)
+    FROM subscriptions s
+    JOIN household_members hm ON hm.user_id = s.payer_id
+    JOIN plans_at(p_date) p   ON p.plan_id = s.plan_id
+    WHERE hm.household_id = p_household_id
+      AND s.start_date <= p_date
+      AND (s.end_date IS NULL OR s.end_date > p_date)
+      AND s.status <> 'paused'
 $$;
 
 -- ---------------------------------------------------------------------------
 -- v_findings — every detector's output in one shape, with a stable
--- fingerprint and a plain-English message
+-- fingerprint and a plain-English message. subject_paths is a JSON array
+-- parallel to subject_ids: element i is the reason path (plan ids) for
+-- subject i, or NULL for findings with no path (usage-based ones)
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE VIEW v_findings AS
 SELECT household_id, 'hidden_duplicate'::text AS alert_type,
@@ -559,7 +642,8 @@ SELECT household_id, 'hidden_duplicate'::text AS alert_type,
                   first_name(payer_name), inr(monthly_price), service_name, plan_name,
                   first_name(via_payer), via_service, path_label)
        END AS message,
-       monthly_price AS savings
+       monthly_price AS savings,
+       jsonb_build_array(to_jsonb(path)) AS subject_paths
 FROM v_hidden_duplicates
 UNION ALL
 SELECT household_id, 'consolidation', subscription_ids, '{}'::int[], recommended_plan_id,
@@ -571,7 +655,11 @@ SELECT household_id, 'consolidation', subscription_ids, '{}'::int[], recommended
               max_members, CASE WHEN plans_needed > 1 THEN ' each' ELSE '' END,
               CASE people WHEN 2 THEN 'both of them' ELSE 'all ' || people END,
               inr(new_cost)),
-       savings
+       savings,
+       -- every subject is covered by the recommended shared plan (x.sid keeps
+       -- the aggregate inside this subquery rather than the outer query)
+       (SELECT jsonb_agg(CASE WHEN x.sid IS NOT NULL THEN to_jsonb(ARRAY[recommended_plan_id]) END ORDER BY x.ord)
+          FROM UNNEST(subscription_ids) WITH ORDINALITY AS x(sid, ord))
 FROM v_consolidation
 UNION ALL
 SELECT household_id, 'spare_capacity', ARRAY[subscription_id], ARRAY[host_subscription_id], NULL,
@@ -579,7 +667,9 @@ SELECT household_id, 'spare_capacity', ARRAY[subscription_id], ARRAY[host_subscr
        format('%s''s %s %s has a free spot (%s of %s used). %s could join it and cancel their own %s plan (%s/mo).',
               first_name(host_payer), service_name, host_plan, member_count, max_members,
               first_name(person), own_plan, inr(own_cost)),
-       own_cost
+       own_cost,
+       (SELECT jsonb_build_array(to_jsonb(ARRAY[s.plan_id])) FROM subscriptions s
+         WHERE s.subscription_id = host_subscription_id)
 FROM v_spare_capacity
 UNION ALL
 SELECT household_id, 'bundle', replaced_ids, '{}'::int[], recommended_plan_id,
@@ -588,21 +678,34 @@ SELECT household_id, 'bundle', replaced_ids, '{}'::int[], recommended_plan_id,
               human_list(replaced_names), inr(current_cost), bundle_service, bundle_plan,
               CASE WHEN covers_everything THEN 'all of them' ELSE 'these (and more)' END,
               inr(bundle_cost)),
-       savings
+       savings,
+       -- per replaced subscription, the shortest path from the bundle to its service
+       (SELECT jsonb_agg(to_jsonb((SELECT pc.path
+                                     FROM v_plan_coverage pc
+                                     JOIN subscriptions s ON s.subscription_id = x.sid
+                                     JOIN plan_catalog p  ON p.plan_id = s.plan_id
+                                    WHERE pc.plan_id = recommended_plan_id
+                                      AND pc.service_id = p.service_id
+                                      AND pc.depth > 0
+                                    ORDER BY pc.depth, pc.path
+                                    LIMIT 1)) ORDER BY x.ord)
+          FROM UNNEST(replaced_ids) WITH ORDINALITY AS x(sid, ord))
 FROM v_bundle_opportunities
 UNION ALL
 SELECT household_id, 'churn_risk', ARRAY[subscription_id], '{}'::int[], NULL,
        'churn:' || subscription_id,
        format('%s (%s) usage is falling: %s sessions per month over the last 6 months. At this rate nobody will be using it in about %s days.',
               service_name, plan_name, array_to_string(trend, ' → '), days_until_unused),
-       monthly_price
+       monthly_price,
+       NULL::jsonb
 FROM v_churn_risk
 UNION ALL
 SELECT household_id, 'waste', ARRAY[subscription_id], '{}'::int[], NULL,
        'waste:' || subscription_id,
        format('%s (%s) %s. %s pays %s/mo for it.',
               service_name, plan_name, reason, first_name(payer_name), inr(monthly_price)),
-       monthly_price
+       monthly_price,
+       NULL::jsonb
 FROM v_waste
 UNION ALL
 SELECT household_id, 'overlap', least_used_subscription_ids, '{}'::int[], NULL,
@@ -610,8 +713,26 @@ SELECT household_id, 'overlap', least_used_subscription_ids, '{}'::int[], NULL,
        format('Your household pays for %s %s services (%s, %s/mo). %s is the least used, with %s session%s in the last 30 days.',
               services_in_category, category_name, human_list(services), inr(category_cost),
               least_used_service, least_used_sessions, CASE WHEN least_used_sessions = 1 THEN '' ELSE 's' END),
-       savings
+       savings,
+       NULL::jsonb
 FROM v_category_overlap;
+
+-- ---------------------------------------------------------------------------
+-- v_alert_reasons — the reason path behind each subscription in a finding,
+-- as text, with the members it covers (FR-38): the members of the subject
+-- subscription, who all keep the service through that path
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE VIEW v_alert_reasons AS
+SELECT x.alert_id, a.household_id, a.alert_type, a.fingerprint, a.status,
+       x.subscription_id, x.role, x.reason_path,
+       path_label(x.reason_path) AS reason_label,
+       (SELECT array_agg(sm.user_id ORDER BY sm.user_id)
+          FROM subscription_members sm WHERE sm.subscription_id = x.subscription_id) AS member_ids,
+       (SELECT array_agg(u.full_name ORDER BY u.full_name)
+          FROM subscription_members sm JOIN users u ON u.user_id = sm.user_id
+         WHERE sm.subscription_id = x.subscription_id) AS member_names
+FROM alert_subscriptions x
+JOIN alerts a ON a.alert_id = x.alert_id;
 
 -- ---------------------------------------------------------------------------
 -- lock_household — every transaction that changes a household's data takes
@@ -639,6 +760,126 @@ END;
 $$;
 
 -- ---------------------------------------------------------------------------
+-- v_auto_needs — the needs the data implies (see member_needs in schema.sql).
+-- A pair with both kinds of evidence is reported once, as usage.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE VIEW v_auto_needs AS
+SELECT DISTINCT ON (user_id, service_id)
+       household_id, user_id, service_id, source, last_evidence_at
+FROM (
+    SELECT hm.household_id, ul.user_id, p.service_id, 'usage'::varchar AS source,
+           MAX(ul.used_at) AS last_evidence_at
+    FROM usage_logs ul
+    JOIN subscriptions s      ON s.subscription_id = ul.subscription_id
+    JOIN plan_catalog p       ON p.plan_id = s.plan_id
+    JOIN household_members hm ON hm.user_id = ul.user_id
+    WHERE ul.used_at >= now() - interval '30 days'
+    GROUP BY hm.household_id, ul.user_id, p.service_id
+    UNION ALL
+    SELECT DISTINCT mc.household_id, mc.user_id, mc.service_id, 'passive', NULL::timestamptz
+    FROM v_member_coverage mc
+    JOIN services sv   ON sv.service_id = mc.service_id
+    JOIN categories c  ON c.category_id = sv.category_id
+    WHERE c.is_passive
+) evidence
+ORDER BY user_id, service_id, source = 'usage' DESC;
+
+-- ---------------------------------------------------------------------------
+-- v_need_coverage — every need that is in force, whether anything covers it
+-- today, and the shortest way it is covered (own plan first, then the fewest
+-- hops through included plans).
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE VIEW v_need_coverage AS
+SELECT DISTINCT ON (n.user_id, n.service_id)
+       hm.household_id, n.user_id, n.service_id, n.source, n.last_evidence_at,
+       mc.subscription_id IS NOT NULL AS covered,
+       mc.subscription_id             AS via_subscription_id,
+       mc.depth, mc.path, mc.path_label
+FROM member_needs n
+JOIN household_members hm     ON hm.user_id = n.user_id
+LEFT JOIN v_member_coverage mc ON mc.user_id = n.user_id AND mc.service_id = n.service_id
+WHERE n.is_needed
+ORDER BY n.user_id, n.service_id, mc.depth, mc.subscription_id;
+
+-- ---------------------------------------------------------------------------
+-- refresh_member_needs — sync the automatic rows of member_needs with
+-- v_auto_needs for one household (or all). Manual rows are never touched:
+-- a manual need stays, and a manual "not needed" keeps the automatic one out.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE PROCEDURE refresh_member_needs(p_household_id INT DEFAULT NULL)
+LANGUAGE plpgsql
+SET jit = off
+AS $$
+BEGIN
+    PERFORM lock_household(p_household_id);
+
+    CREATE TEMP TABLE IF NOT EXISTS _auto_needs ON COMMIT DROP AS
+        SELECT * FROM v_auto_needs WITH NO DATA;
+    TRUNCATE _auto_needs;
+    INSERT INTO _auto_needs
+        SELECT * FROM v_auto_needs
+        WHERE p_household_id IS NULL OR household_id = p_household_id;
+
+    -- automatic needs the data no longer supports go away
+    DELETE FROM member_needs n
+    USING household_members hm
+    WHERE hm.user_id = n.user_id
+      AND (p_household_id IS NULL OR hm.household_id = p_household_id)
+      AND n.source <> 'manual'
+      AND NOT EXISTS (SELECT 1 FROM _auto_needs a
+                      WHERE a.user_id = n.user_id AND a.service_id = n.service_id);
+
+    -- new ones are added, existing automatic ones refreshed, manual ones kept
+    INSERT INTO member_needs (user_id, service_id, source, last_evidence_at)
+    SELECT user_id, service_id, source, last_evidence_at FROM _auto_needs
+    ON CONFLICT (user_id, service_id) DO UPDATE
+        SET source           = EXCLUDED.source,
+            last_evidence_at = EXCLUDED.last_evidence_at,
+            updated_at       = now()
+        WHERE member_needs.source <> 'manual'
+          AND (member_needs.source, member_needs.last_evidence_at)
+              IS DISTINCT FROM (EXCLUDED.source, EXCLUDED.last_evidence_at);
+
+    DROP TABLE _auto_needs;
+END;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- set_member_need — the owner's override for one (person, service):
+--   true   they need it, whatever the data says
+--   false  they don't, and the automatic need stays out
+--   NULL   remove the override and go back to what the data says
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION set_member_need(p_user_id INT, p_service_id INT, p_is_needed BOOLEAN)
+RETURNS VOID
+LANGUAGE plpgsql
+SET jit = off
+AS $$
+DECLARE
+    v_hh INT;
+BEGIN
+    SELECT household_id INTO v_hh FROM household_members WHERE user_id = p_user_id;
+    IF v_hh IS NULL THEN
+        RAISE EXCEPTION 'User % is not part of any household', p_user_id USING ERRCODE = 'check_violation';
+    END IF;
+    PERFORM lock_household(v_hh);
+
+    IF p_is_needed IS NULL THEN
+        DELETE FROM member_needs
+        WHERE user_id = p_user_id AND service_id = p_service_id AND source = 'manual';
+    ELSE
+        INSERT INTO member_needs (user_id, service_id, source, is_needed, last_evidence_at)
+        VALUES (p_user_id, p_service_id, 'manual', p_is_needed, NULL)
+        ON CONFLICT (user_id, service_id) DO UPDATE
+            SET source = 'manual', is_needed = EXCLUDED.is_needed,
+                last_evidence_at = NULL, updated_at = now();
+    END IF;
+
+    CALL refresh_member_needs(v_hh);
+END;
+$$;
+
+-- ---------------------------------------------------------------------------
 -- refresh_alerts — sync the alerts table with the current findings for one
 -- household (or all). Idempotent:
 --   * open alerts whose finding no longer exists are deleted
@@ -653,6 +894,9 @@ SET jit = off
 AS $$
 BEGIN
     PERFORM lock_household(p_household_id);
+
+    -- needs first: they follow the same data the findings do
+    CALL refresh_member_needs(p_household_id);
 
     -- snapshot the findings once so all statements below see the same thing
     CREATE TEMP TABLE IF NOT EXISTS _findings ON COMMIT DROP AS
@@ -688,13 +932,16 @@ BEGIN
       AND a.status = 'open'
       AND (p_household_id IS NULL OR a.household_id = p_household_id);
 
-    INSERT INTO alert_subscriptions (alert_id, subscription_id, role)
-    SELECT a.alert_id, sid, 'subject'
+    INSERT INTO alert_subscriptions (alert_id, subscription_id, role, reason_path)
+    SELECT a.alert_id, x.sid, 'subject',
+           CASE WHEN jsonb_typeof(f.subject_paths -> (x.ord::int - 1)) = 'array'
+                THEN ARRAY(SELECT jsonb_array_elements_text(f.subject_paths -> (x.ord::int - 1))::int)
+           END
     FROM _findings f
     JOIN alerts a ON a.household_id = f.household_id AND a.fingerprint = f.fingerprint AND a.status = 'open'
-    CROSS JOIN LATERAL UNNEST(f.subject_ids) AS sid
+    CROSS JOIN LATERAL UNNEST(f.subject_ids) WITH ORDINALITY AS x(sid, ord)
     UNION
-    SELECT a.alert_id, sid, 'source'
+    SELECT a.alert_id, sid, 'source', NULL
     FROM _findings f
     JOIN alerts a ON a.household_id = f.household_id AND a.fingerprint = f.fingerprint AND a.status = 'open'
     CROSS JOIN LATERAL UNNEST(f.source_ids) AS sid

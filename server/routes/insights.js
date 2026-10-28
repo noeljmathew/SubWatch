@@ -42,6 +42,23 @@ router.get('/households/:id/forecast', async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
+// GET /api/households/:id/spend?date=YYYY-MM-DD — monthly spend on that date,
+// at the prices valid then (default: today)
+router.get('/households/:id/spend', async (req, res, next) => {
+    const date = req.query.date || null;
+    if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+    }
+    try {
+        const { rows } = await pool.query(
+            `SELECT COALESCE($2::date, CURRENT_DATE)::text AS date,   -- text: no timezone shift in JSON
+                    household_spend_at($1, COALESCE($2::date, CURRENT_DATE)) AS monthly_spend`,
+            [req.params.id, date]
+        );
+        res.json(rows[0]);
+    } catch (err) { next(err); }
+});
+
 // GET /api/households/:id/entitlements — everything the household unlocks
 // indirectly, with the path through the entitlement graph
 router.get('/households/:id/entitlements', async (req, res, next) => {

@@ -1,0 +1,16 @@
+household,fingerprint,message
+Sharma Household,churn:10,JioHotstar (Super) usage is falling: 13 → 10 → 8 → 5 → 3 → 1 sessions per month over the last 6 months. At this rate nobody will be using it in about 8 days.
+Sharma Household,consolidate:9,"Arjun, Dev and Meera each pay for Spotify separately (₹297/mo). One Spotify Family plan (up to 6 people) would cover all 3 for ₹179/mo."
+Sharma Household,dup:2,"Priya pays ₹50/mo for Prime Video (Mobile Edition), but already gets it through Arjun's Airtel Postpaid plan: Airtel Postpaid (Family 1199) → Amazon Prime → Prime Video."
+Sharma Household,dup:3,"Meera pays ₹125/mo for Amazon Prime (Annual), but already gets it through Arjun's Airtel Postpaid plan: Airtel Postpaid (Family 1199) → Amazon Prime."
+Sharma Household,dup:5,"Dev pays ₹119/mo for YouTube Music (Individual), but already gets it through Priya's YouTube Premium plan: YouTube Premium (Family) → YouTube Music."
+Sharma Household,overlap:1,"Your household pays for 3 Video Streaming services (JioHotstar, Netflix and YouTube Premium, ₹1,048/mo). JioHotstar is the least used, with 1 session in the last 30 days."
+Sharma Household,waste:11,Audible (Monthly) hasn't been used in 82 days. Arjun pays ₹199/mo for it.
+Hostel Room A-412,bundle:30,"Your household pays separately for Apple Music, Apple TV+ and iCloud+ (₹273/mo). Apple One Individual includes all of them for ₹195/mo."
+Hostel Room A-412,churn:21,JioHotstar (Mobile) usage is falling: 9 → 7 → 5 → 3 → 2 → 1 sessions per month over the last 6 months. At this rate nobody will be using it in about 8 days.
+Hostel Room A-412,consolidate:2,"Aditya, Karthik and Rahul each pay for YouTube Premium separately (₹387/mo). One YouTube Premium Family plan (up to 5 people) would cover all 3 for ₹299/mo."
+Hostel Room A-412,overlap:1,"Your household pays for 4 Video Streaming services (Apple TV+, JioHotstar, Netflix and YouTube Premium, ₹685/mo). JioHotstar is the least used, with 1 session in the last 30 days."
+Hostel Room A-412,spare:16:15,Karthik's Spotify Duo has a free spot (1 of 2 used). Aditya could join it and cancel their own Individual plan (₹119/mo).
+Iyer Residence,consolidate:9,Ananya and Vikram each pay for Spotify separately (₹238/mo). One Spotify Duo plan (up to 2 people) would cover both of them for ₹149/mo.
+Iyer Residence,dup:23,"Ananya pays ₹199/mo for Netflix (Basic), but already gets it through Vikram's Jio Postpaid plan: Jio Postpaid (Plus 699) → Netflix."
+Iyer Residence,waste:26,"LinkedIn Premium (Career) has never been used since it started 120 days ago. Vikram pays ₹1,500/mo for it."

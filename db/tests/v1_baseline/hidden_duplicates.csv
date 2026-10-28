@@ -1,0 +1,5 @@
+household,subscription_id,payer_name,service_name,plan_name,via_subscription_id,via_payer,via_service,via_plan,depth,path_label
+Sharma Household,2,Priya Sharma,Prime Video,Mobile Edition,1,Arjun Sharma,Airtel Postpaid,Family 1199,2,Airtel Postpaid (Family 1199) → Amazon Prime → Prime Video
+Sharma Household,3,Meera Sharma,Amazon Prime,Annual,1,Arjun Sharma,Airtel Postpaid,Family 1199,1,Airtel Postpaid (Family 1199) → Amazon Prime
+Sharma Household,5,Dev Sharma,YouTube Music,Individual,4,Priya Sharma,YouTube Premium,Family,1,YouTube Premium (Family) → YouTube Music
+Iyer Residence,23,Ananya Iyer,Netflix,Basic,22,Vikram Iyer,Jio Postpaid,Plus 699,1,Jio Postpaid (Plus 699) → Netflix

@@ -1,0 +1,24 @@
+root_plan_id,included_plan_id,included_service_id,depth,path,path_label
+3,22,8,1,"{3,22}",YouTube Premium (Family) → YouTube Music
+4,22,8,1,"{4,22}",YouTube Premium (Student) → YouTube Music
+5,22,8,1,"{5,22}",YouTube Premium (Individual) → YouTube Music
+29,1,1,1,"{29,1}",Apple One (Family) → Apple TV+
+29,18,7,1,"{29,18}",Apple One (Family) → Apple Music
+29,37,15,1,"{29,37}",Apple One (Family) → iCloud+
+30,1,1,1,"{30,1}",Apple One (Individual) → Apple TV+
+30,18,7,1,"{30,18}",Apple One (Individual) → Apple Music
+30,37,15,1,"{30,37}",Apple One (Individual) → iCloud+
+31,6,3,1,"{31,6}",Amazon Prime (Included) → Prime Video
+31,17,6,1,"{31,17}",Amazon Prime (Included) → Amazon Music
+32,6,3,1,"{32,6}",Amazon Prime (Monthly) → Prime Video
+32,17,6,1,"{32,17}",Amazon Prime (Monthly) → Amazon Music
+33,6,3,1,"{33,6}",Amazon Prime (Annual) → Prime Video
+33,17,6,1,"{33,17}",Amazon Prime (Annual) → Amazon Music
+40,6,3,2,"{40,31,6}",Jio Postpaid (Plus 699) → Amazon Prime → Prime Video
+40,8,4,1,"{40,8}",Jio Postpaid (Plus 699) → JioHotstar
+40,12,5,1,"{40,12}",Jio Postpaid (Plus 699) → Netflix
+40,17,6,2,"{40,31,17}",Jio Postpaid (Plus 699) → Amazon Prime → Amazon Music
+40,31,11,1,"{40,31}",Jio Postpaid (Plus 699) → Amazon Prime
+41,6,3,2,"{41,31,6}",Airtel Postpaid (Family 1199) → Amazon Prime → Prime Video
+41,17,6,2,"{41,31,17}",Airtel Postpaid (Family 1199) → Amazon Prime → Amazon Music
+41,31,11,1,"{41,31}",Airtel Postpaid (Family 1199) → Amazon Prime

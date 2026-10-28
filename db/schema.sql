@@ -65,40 +65,113 @@ CREATE TABLE services (
 );
 CREATE INDEX idx_services_category ON services(category_id);
 
+-- A plan's identity (what it is, how many people, how often it bills) lives
+-- in PLAN_CATALOG. Its price and what it includes change over time, so those
+-- live in effective-dated history tables below; the PLANS and ENTITLEMENTS
+-- views show what is valid today, so every v1 query keeps working unchanged.
 -- 'included' plans are not sold on their own; they only exist as the target
 -- of an entitlement (e.g. "Prime Video, included with Prime")
-CREATE TABLE plans (
+CREATE TABLE plan_catalog (
     plan_id         SERIAL PRIMARY KEY,
     service_id      INT NOT NULL REFERENCES services(service_id) ON DELETE CASCADE,
     name            VARCHAR(100) NOT NULL,
     tier            VARCHAR(10) NOT NULL
                      CHECK (tier IN ('individual','student','duo','family','included')),
-    price           NUMERIC(10,2) NOT NULL CHECK (price >= 0),
     billing_cycle   VARCHAR(10) NOT NULL DEFAULT 'monthly'
                      CHECK (billing_cycle IN ('weekly','monthly','quarterly','yearly')),
     max_members     INT NOT NULL DEFAULT 1 CHECK (max_members >= 1),
     is_purchasable  BOOLEAN NOT NULL DEFAULT true,
-    monthly_price   NUMERIC(10,2) GENERATED ALWAYS AS (
-        CASE billing_cycle
-            WHEN 'weekly'    THEN ROUND(price * 52 / 12, 2)
-            WHEN 'monthly'   THEN price
-            WHEN 'quarterly' THEN ROUND(price / 3, 2)
-            WHEN 'yearly'    THEN ROUND(price / 12, 2)
-        END
-    ) STORED,
     UNIQUE (service_id, name),
-    CHECK (tier <> 'included' OR (is_purchasable = false AND price = 0))
+    CHECK (tier <> 'included' OR is_purchasable = false)
 );
-CREATE INDEX idx_plans_service ON plans(service_id);
+CREATE INDEX idx_plan_catalog_service ON plan_catalog(service_id);
 
--- entitlement graph: plan_id includes included_plan_id (a directed edge)
-CREATE TABLE entitlements (
-    plan_id           INT NOT NULL REFERENCES plans(plan_id) ON DELETE CASCADE,
-    included_plan_id  INT NOT NULL REFERENCES plans(plan_id) ON DELETE CASCADE,
-    PRIMARY KEY (plan_id, included_plan_id),
-    CHECK (plan_id <> included_plan_id)
+-- btree_gist lets an exclusion constraint mix "=" on a plain column with
+-- "&&" (overlaps) on a date range
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+
+-- price of a plan per billing cycle, valid from valid_from up to (not
+-- including) valid_to; valid_to NULL = still the price. The EXCLUDE
+-- constraint means two price rows for the same plan can never overlap, so
+-- "the price on date d" always has at most one answer.
+CREATE TABLE plan_price_history (
+    plan_id       INT NOT NULL REFERENCES plan_catalog(plan_id) ON DELETE CASCADE,
+    price         NUMERIC(10,2) NOT NULL CHECK (price >= 0),
+    valid_from    DATE NOT NULL,
+    valid_to      DATE,
+    valid_during  DATERANGE GENERATED ALWAYS AS (daterange(valid_from, valid_to, '[)')) STORED,
+    PRIMARY KEY (plan_id, valid_from),
+    CHECK (valid_to IS NULL OR valid_to > valid_from),
+    EXCLUDE USING gist (plan_id WITH =, valid_during WITH &&)
 );
-CREATE INDEX idx_entitlements_included ON entitlements(included_plan_id);
+
+-- entitlement graph over time: parent_plan_id includes included_plan_id (a
+-- directed edge) while the range is valid. Same no-overlap rule per edge.
+CREATE TABLE plan_inclusion_history (
+    parent_plan_id    INT NOT NULL REFERENCES plan_catalog(plan_id) ON DELETE CASCADE,
+    included_plan_id  INT NOT NULL REFERENCES plan_catalog(plan_id) ON DELETE CASCADE,
+    valid_from        DATE NOT NULL,
+    valid_to          DATE,
+    valid_during      DATERANGE GENERATED ALWAYS AS (daterange(valid_from, valid_to, '[)')) STORED,
+    PRIMARY KEY (parent_plan_id, included_plan_id, valid_from),
+    CHECK (parent_plan_id <> included_plan_id),
+    CHECK (valid_to IS NULL OR valid_to > valid_from),
+    EXCLUDE USING gist (parent_plan_id WITH =, included_plan_id WITH =, valid_during WITH &&)
+);
+CREATE INDEX idx_plan_inclusion_history_included ON plan_inclusion_history(included_plan_id);
+
+-- a price per billing cycle, expressed per month, so weekly/quarterly/yearly
+-- plans compare on one basis
+CREATE FUNCTION monthly_equivalent(p_price NUMERIC, p_cycle TEXT) RETURNS NUMERIC
+LANGUAGE sql IMMUTABLE
+SET jit = off
+AS $$
+    SELECT CASE p_cycle
+               WHEN 'weekly'    THEN ROUND(p_price * 52 / 12, 2)
+               WHEN 'monthly'   THEN p_price
+               WHEN 'quarterly' THEN ROUND(p_price / 3, 2)
+               WHEN 'yearly'    THEN ROUND(p_price / 12, 2)
+           END
+$$;
+
+-- every plan as it is on p_date (price NULL if it had no price then)
+CREATE FUNCTION plans_at(p_date DATE)
+RETURNS TABLE (plan_id INT, service_id INT, name VARCHAR, tier VARCHAR, price NUMERIC,
+               billing_cycle VARCHAR, max_members INT, is_purchasable BOOLEAN, monthly_price NUMERIC)
+LANGUAGE sql STABLE
+SET jit = off
+AS $$
+    SELECT pc.plan_id, pc.service_id, pc.name, pc.tier, ph.price, pc.billing_cycle,
+           pc.max_members, pc.is_purchasable, monthly_equivalent(ph.price, pc.billing_cycle)
+    FROM plan_catalog pc
+    LEFT JOIN plan_price_history ph ON ph.plan_id = pc.plan_id AND ph.valid_during @> p_date
+$$;
+
+-- direct entitlement edges valid on p_date
+CREATE FUNCTION entitlements_at(p_date DATE)
+RETURNS TABLE (plan_id INT, included_plan_id INT)
+LANGUAGE sql STABLE
+SET jit = off
+AS $$
+    SELECT parent_plan_id, included_plan_id
+    FROM plan_inclusion_history
+    WHERE valid_during @> p_date
+$$;
+
+-- PLANS and ENTITLEMENTS as v1 knew them: today's prices and today's edges.
+-- Written out (not as SELECT * FROM plans_at(CURRENT_DATE)) so the planner can
+-- push filters and joins through them.
+CREATE VIEW plans AS
+SELECT pc.plan_id, pc.service_id, pc.name, pc.tier, ph.price, pc.billing_cycle,
+       pc.max_members, pc.is_purchasable,
+       monthly_equivalent(ph.price, pc.billing_cycle) AS monthly_price
+FROM plan_catalog pc
+LEFT JOIN plan_price_history ph ON ph.plan_id = pc.plan_id AND ph.valid_during @> CURRENT_DATE;
+
+CREATE VIEW entitlements AS
+SELECT parent_plan_id AS plan_id, included_plan_id
+FROM plan_inclusion_history
+WHERE valid_during @> CURRENT_DATE;
 
 -- ---------------------------------------------------------------------------
 -- subscriptions and who shares them
@@ -106,7 +179,7 @@ CREATE INDEX idx_entitlements_included ON entitlements(included_plan_id);
 CREATE TABLE subscriptions (
     subscription_id SERIAL PRIMARY KEY,
     payer_id        INT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
-    plan_id         INT NOT NULL REFERENCES plans(plan_id),
+    plan_id         INT NOT NULL REFERENCES plan_catalog(plan_id),
     start_date      DATE NOT NULL,
     end_date        DATE,
     status          VARCHAR(10) NOT NULL DEFAULT 'active'
@@ -140,6 +213,32 @@ CREATE TABLE usage_logs (
 CREATE INDEX idx_usage_logs_sub_time ON usage_logs(subscription_id, used_at);
 
 -- ---------------------------------------------------------------------------
+-- member_needs — the services each person needs (FR-28). A need belongs to
+-- the person (household_members), not to a subscription: the optimizer may
+-- move them onto a different plan, and the need has to survive that.
+--   usage    they used the service in the last 30 days (on any subscription,
+--            even one since cancelled)
+--   passive  they can reach a passive-category service (phone plan, cloud
+--            storage) through an active subscription. Nobody logs usage for
+--            those, so without this they would look unneeded.
+--   manual   set by the owner. is_needed = false is an override that removes
+--            an automatic need and keeps it removed, the same way a
+--            dismissed alert stays dismissed.
+-- Automatic rows are kept in sync by refresh_member_needs() (detection.sql).
+-- ---------------------------------------------------------------------------
+CREATE TABLE member_needs (
+    user_id           INT NOT NULL REFERENCES household_members(user_id) ON DELETE CASCADE,
+    service_id        INT NOT NULL REFERENCES services(service_id) ON DELETE CASCADE,
+    source            VARCHAR(10) NOT NULL CHECK (source IN ('usage','passive','manual')),
+    is_needed         BOOLEAN NOT NULL DEFAULT true,
+    last_evidence_at  TIMESTAMPTZ,
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, service_id),
+    CHECK (source = 'manual' OR is_needed)
+);
+CREATE INDEX idx_member_needs_service ON member_needs(service_id);
+
+-- ---------------------------------------------------------------------------
 -- alerts — persisted optimizer output. fingerprint identifies "the same
 -- finding" across refreshes, so a dismissed alert stays dismissed.
 -- An alert can involve any number of subscriptions (a family-plan suggestion
@@ -152,7 +251,7 @@ CREATE TABLE alerts (
     alert_type                VARCHAR(20) NOT NULL
                                CHECK (alert_type IN ('hidden_duplicate','consolidation','spare_capacity',
                                                      'bundle','churn_risk','waste','overlap')),
-    recommended_plan_id       INT REFERENCES plans(plan_id) ON DELETE CASCADE,
+    recommended_plan_id       INT REFERENCES plan_catalog(plan_id) ON DELETE CASCADE,
     fingerprint               TEXT NOT NULL,
     message                   TEXT NOT NULL,
     potential_monthly_savings NUMERIC(10,2) CHECK (potential_monthly_savings IS NULL OR potential_monthly_savings >= 0),
@@ -165,12 +264,19 @@ CREATE INDEX idx_alerts_household_status ON alerts(household_id, status);
 
 -- which subscriptions an alert is about. role 'subject' = the subscription the
 -- advice is about (cancel/merge/switch this one); 'source' = the subscription
--- that explains it (e.g. the telecom plan that already includes the service)
+-- that explains it (e.g. the telecom plan that already includes the service).
+-- reason_path (FR-38) is the chain of plan ids that makes a subject
+-- replaceable, e.g. Airtel Family → Amazon Prime (included) → Prime Video
+-- (included). It lives here, not on alerts, because one finding can have a
+-- different path per subscription (a bundle replaces each one through its
+-- own included plan). NULL for usage-based findings, which have no path.
 CREATE TABLE alert_subscriptions (
     alert_id         INT NOT NULL REFERENCES alerts(alert_id) ON DELETE CASCADE,
     subscription_id  INT NOT NULL REFERENCES subscriptions(subscription_id) ON DELETE CASCADE,
     role             VARCHAR(10) NOT NULL CHECK (role IN ('subject','source')),
-    PRIMARY KEY (alert_id, subscription_id)
+    reason_path      INT[],
+    PRIMARY KEY (alert_id, subscription_id),
+    CHECK (reason_path IS NULL OR (role = 'subject' AND cardinality(reason_path) >= 1))
 );
 CREATE INDEX idx_alert_subscriptions_sub ON alert_subscriptions(subscription_id);
 
@@ -230,6 +336,10 @@ BEGIN
         RAISE EXCEPTION 'Plan % is not sold on its own (it only comes included with another plan)', NEW.plan_id
             USING ERRCODE = 'check_violation';
     END IF;
+    IF (SELECT price FROM plans WHERE plan_id = NEW.plan_id) IS NULL THEN
+        RAISE EXCEPTION 'Plan % has no current price', NEW.plan_id
+            USING ERRCODE = 'check_violation';
+    END IF;
     IF NOT EXISTS (SELECT 1 FROM household_members WHERE user_id = NEW.payer_id) THEN
         RAISE EXCEPTION 'User % is not part of any household', NEW.payer_id
             USING ERRCODE = 'check_violation';
@@ -241,6 +351,25 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER trg_validate_subscription
     BEFORE INSERT OR UPDATE OF plan_id, payer_id ON subscriptions
     FOR EACH ROW EXECUTE FUNCTION validate_subscription();
+
+-- an 'included' plan is never charged for, at any point in its history
+-- (a CHECK can't see the tier, which lives in plan_catalog)
+CREATE FUNCTION check_plan_price() RETURNS TRIGGER
+LANGUAGE plpgsql
+SET jit = off
+AS $$
+BEGIN
+    IF NEW.price <> 0 AND (SELECT tier FROM plan_catalog WHERE plan_id = NEW.plan_id) = 'included' THEN
+        RAISE EXCEPTION 'Plan % only comes included with another plan, so its price must be 0', NEW.plan_id
+            USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_check_plan_price
+    BEFORE INSERT OR UPDATE OF plan_id, price ON plan_price_history
+    FOR EACH ROW EXECUTE FUNCTION check_plan_price();
 
 -- the payer is always a member of their own subscription
 CREATE FUNCTION enrol_payer() RETURNS TRIGGER AS $$
