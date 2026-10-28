@@ -1,0 +1,306 @@
+SubWatch v2: what was added
+===========================
+
+v2 turns the v1 prototype (separate findings) into one household-wide
+decision: the cheapest set of subscriptions that still covers every
+person's needs, a way to simulate changes before they happen, and a
+confidence level on every finding. It follows PRD v2, phases v2a to v2d,
+plus a dashboard for all of it. Everything v1 computes is unchanged: a
+snapshot of v1's output on a fresh database is diffed after every change
+(db/tests/v1_baseline).
+
+Setup is the same as v1: run db/schema.sql, db/seed.sql and
+db/detection.sql, in that order, on a fresh database.
+
+
+1. NEW TABLES
+-------------
+
+plan_catalog  (replaces the v1 table "plans"; a view named plans sits on top)
+  plan_id SERIAL PK, service_id FK services ON DELETE CASCADE,
+  name, tier CHECK (individual|student|duo|family|included),
+  billing_cycle CHECK (weekly|monthly|quarterly|yearly),
+  max_members CHECK >= 1, is_purchasable.
+  UNIQUE (service_id, name); CHECK an 'included' plan is not purchasable.
+  Price is no longer stored here; it moved to plan_price_history.
+
+plan_price_history  (FR-37)
+  plan_id FK plan_catalog ON DELETE CASCADE, price CHECK >= 0,
+  valid_from NOT NULL, valid_to (NULL = still valid),
+  valid_during DATERANGE generated from the two dates.
+  PK (plan_id, valid_from); CHECK valid_to > valid_from;
+  EXCLUDE USING gist (plan_id =, valid_during &&): a plan's price ranges
+  can never overlap (needs the btree_gist extension).
+  Trigger trg_check_plan_price: an included plan's price must be 0.
+
+plan_inclusion_history  (FR-37; replaces the v1 table "entitlements")
+  parent_plan_id, included_plan_id (both FK plan_catalog ON DELETE CASCADE),
+  valid_from, valid_to, valid_during (generated).
+  PK (parent_plan_id, included_plan_id, valid_from); CHECK parent <> included;
+  CHECK valid_to > valid_from; EXCLUDE (parent =, included =, valid_during &&).
+
+member_needs  (FR-28)
+  user_id FK household_members(user_id) ON DELETE CASCADE,
+  service_id FK services ON DELETE CASCADE,
+  source CHECK (usage|passive|manual), is_needed, last_evidence_at, updated_at.
+  PK (user_id, service_id); CHECK (source = 'manual' OR is_needed): only an
+  owner's manual override can say "not needed".
+
+finding_evidence  (FR-39)
+  evidence_id BIGSERIAL PK, alert_id FK alerts ON DELETE CASCADE,
+  evidence_type CHECK (coverage|price|usage|silence), source_ref (e.g.
+  'plan:41', 'user:9'), value (the fact as text), weight CHECK -5..5.
+  CHECK a silence row, and only a silence row, has a negative weight.
+
+usage_data_quality  (FR-40)
+  user_id PK FK household_members ON DELETE CASCADE, last_logged_at,
+  days_silent CHECK >= 0, flagged (45+ days with no usage logged), checked_at.
+
+optimization_runs  (FR-29 to FR-36)
+  run_id SERIAL PK, household_id FK households ON DELETE CASCADE,
+  kind CHECK (optimize|what_if), scenario_name (only for what_if),
+  evaluated_on, cost_before, cost_after (both CHECK >= 0), is_optimal,
+  elapsed_ms CHECK >= 0, state_hash, status CHECK (proposed|applied|stale),
+  created_at, applied_at.
+  CHECK applied_at is set exactly when status = 'applied'.
+  Deferred constraint triggers (trg_run_reconciles, trg_run_steps_reconcile):
+  at COMMIT the step savings must add up to cost_before - cost_after.
+
+optimization_steps
+  run_id FK optimization_runs ON DELETE CASCADE, step_no CHECK >= 1,
+  action CHECK (start|switch|add_member|cancel), subscription_id, plan_id,
+  payer_id, user_ids INT[], saving (negative for a start), description,
+  reason, reason_path INT[], confidence CHECK (High|Medium|Low).
+  PK (run_id, step_no); a CHECK per action says which columns it must have.
+
+optimization_alert_outcomes  (FR-32)
+  run_id FK, alert_id FK alerts, outcome CHECK (adopted|superseded|rejected),
+  alert_saving, note. PK (run_id, alert_id).
+
+scenarios  (FR-36)
+  scenario_id SERIAL PK, household_id FK households ON DELETE CASCADE, name,
+  change_type CHECK (cancel_subscription|switch_plan|remove_member|
+  remove_inclusion|raise_price), change_params JSONB CHECK is an object.
+  UNIQUE (household_id, name).
+
+Changes to v1 tables
+  alerts: + confidence CHECK (High|Medium|Low),
+          + counts_toward_savings, generated as (confidence <> 'Low').
+  alert_subscriptions: + reason_path INT[], allowed only on 'subject' rows.
+  subscriptions / alerts: plan foreign keys now point at plan_catalog.
+
+
+2. VIEWS
+--------
+
+plans                   v1's plans table as a view: catalog + today's price
+                        and monthly price.
+entitlements            v1's entitlement edges as a view: inclusions valid today.
+v_inclusion_closure     One recursive walk of the inclusion graph over all
+                        time, carrying the intersection of the edge date
+                        ranges along each path.
+v_entitlement_closure   (rebuilt) That walk filtered to today, with a
+                        readable path; same columns as v1.
+v_plan_coverage         Every service a purchasable plan reaches today: its
+                        own (depth 0) plus the closure. The one traversal
+                        behind duplicates, bundles, needs and the optimizer.
+v_member_coverage       Who can use which service, through which active
+                        subscription and path.
+v_auto_needs            Needs implied by the data: usage in the last 30 days,
+                        or a passive service reached at any depth.
+v_need_coverage         Each need in force, whether it is covered, and the
+                        shortest covering path.
+v_alert_reasons         Each finding's subscriptions with reason path, label
+                        and the members covered.
+v_usage_data_quality    Days since each person last logged any usage; 45+
+                        is flagged.
+v_finding_evidence      The facts behind every open finding, with
+                        documented weights.
+v_finding_confidence    Evidence rows to High / Medium / Low: each type counts
+                        once at its strongest row; >= 3 High, 2 Medium,
+                        otherwise Low; any silence row means Low.
+v_household_savings     Savings found (High and Medium concrete findings,
+                        capped at spend), worth a look, and the Low count.
+Changed v1 views: v_hidden_duplicates and v_bundle_opportunities now read
+v_plan_coverage; v_findings carries a reason path per subject.
+
+
+3. FUNCTIONS AND PROCEDURES  (every new one runs with SET jit = off)
+----------------------------
+
+monthly_equivalent(price, cycle)      A per-cycle price as a monthly price.
+plans_at(date)                        Every plan with the price valid on a date.
+entitlements_at(date)                 Inclusion edges valid on a date.
+entitlement_closure_at(date)          The closure as it was or will be on a date.
+path_label(int[])                     A plan-id path as "Airtel (Family) →
+                                      Amazon Prime → Prime Video".
+household_spend_at(household, date)   Monthly spend on a date at that day's
+                                      prices.
+check_plan_price()                    Trigger: included plans cost 0.
+check_run_reconciles()                Deferred trigger: a run's steps add up.
+refresh_member_needs(household)       Procedure. Syncs the automatic needs and
+                                      never touches manual rows; takes the
+                                      household lock.
+set_member_need(user, service, bool)  An owner's override: true, false, or
+                                      NULL to go back to automatic; takes the
+                                      household lock.
+refresh_usage_data_quality(household) Procedure. Refreshes the silence check;
+                                      takes the household lock.
+optimizer_input(household, date)      The whole household as one ordered JSON
+                                      document for the optimizer: users, needs,
+                                      subscriptions, candidate plans with
+                                      coverage, open findings, inclusion edges,
+                                      silent members.
+optimizer_state_hash(household, date) md5 of that document, used to detect
+                                      stale runs.
+apply_optimization(run)               Carries out a run's steps in one
+                                      transaction. Takes the household lock,
+                                      then the run row FOR UPDATE. Refuses
+                                      what-if runs and runs already used; marks
+                                      a stale run instead of applying it.
+                                      Afterwards it re-checks needs, passive
+                                      services and cost, and rolls back if any
+                                      check fails.
+Changed: refresh_alerts also refreshes needs, data quality, evidence and
+confidence; renewal_forecast prices each renewal at the price on that date;
+validate_subscription refuses a plan with no current price.
+
+
+4. API ROUTES
+-------------
+
+GET    /api/households/:id/needs                       Needs with source and coverage
+POST   /api/households/:id/needs                       {user_id, service_id}: needed
+DELETE /api/households/:id/needs/:userId/:serviceId    Not needed (?reset=1 clears
+                                                       the override)
+GET    /api/households/:id/spend?date=YYYY-MM-DD       Monthly spend on a date
+GET    /api/households/:id/alerts                      (extended) adds reasons,
+                                                       evidence, confidence
+GET    /api/households/:id/summary                     (extended) Low findings excluded
+                                                       from savings found
+GET    /api/households/:id/entitlements                (extended) adds the plan-id path
+GET    /api/plans                                      (extended) adds service_id
+POST   /api/households/:id/optimize                    Compute and store a run
+GET    /api/optimization-runs/:id                      Run, steps, counted saving,
+                                                       finding outcomes
+POST   /api/optimization-runs/:id/preview              Run the steps, then roll back
+POST   /api/optimization-runs/:id/apply                Run the steps and commit (409
+                                                       if stale)
+POST   /api/households/:id/what-if                     Simulate one change
+GET    /api/households/:id/scenarios                   Saved scenarios
+POST   /api/households/:id/scenarios                   {name, change}: simulate, then save
+GET    /api/scenarios/:id                              Re-simulate on today's data,
+                                                       with a stale flag
+DELETE /api/scenarios/:id                              Delete a scenario
+GET    /api/scenarios/compare?a=&b=                    Two scenarios side by side
+
+Server code: server/optimizer.js (the search), server/whatif.js (the
+simulator), server/routes/needs.js, optimizer.js and whatif.js.
+Dashboard: public/index.html.
+
+
+5. TEST FILES
+-------------
+
+db/tests/snapshot.sql       Writes everything v1 computes to CSV files.
+db/tests/v1_baseline/       Those CSVs from the v1 prototype on a fresh seed.
+db/tests/regress.sh         Rebuilds a scratch database from the three files
+                            and diffs its snapshot with the baseline. Refuses
+                            to touch the working database.
+db/tests/v2a_check.sql      History, coverage, needs and reason paths (rolled back).
+db/tests/v2b_check.js       28 checks:
+                            - never worse than v1's non-conflicting findings
+                            - no need left uncovered and nothing passive lost
+                            - no splitting
+                            - same answer on repeat runs
+                            - a failure injected in the last step leaves
+                              nothing changed
+db/tests/v2c_check.js       22 checks: 123 what-if scenarios across the three
+                            households leave all 18 live tables unchanged (row
+                            counts and hashes), every repair replayed
+                            independently re-covers every need, inclusion loss
+                            matches v_member_coverage, and the HTTP API works.
+db/tests/v2d_check.js       26 checks:
+                            - the evidence and confidence rule
+                            - Low findings excluded from the totals
+                            - the 45-day silence
+                            - step confidence
+                            - jit = off on all 15 new routines
+                            - the household lock
+                            - a benchmark run
+db/tests/benchmark.js       FR-42 benchmark mode (see the scaling decision below).
+server/optimizer.test.js    11 unit tests, including the PRD's worked example,
+                            no splitting, MIN_SAVING, passive, student,
+                            capacity, the time cap, and agreement with an
+                            exhaustive search on 40 random households.
+server/whatif.test.js       9 unit tests: input never modified, each change
+                            type, repairs, refusals.
+server/test-helpers.js      Shared household builder for the unit tests.
+Run the unit tests with: cd server && npm test
+
+
+6. DESIGN DECISIONS
+-------------------
+
+1. History behind views, so v1 didn't change.
+   Prices and inclusions moved into effective-dated tables, but views
+   named plans and entitlements show today's rows, so every v1 query,
+   trigger and route works unchanged. Exclusion constraints make the
+   database refuse overlapping price or inclusion ranges. The recursive
+   closure intersects date ranges along each path, so one traversal
+   answers "what does this plan include" for any date.
+
+2. Needs belong to people, and passive services are always needed.
+   A need sits on the household member, not on a subscription, because
+   the optimizer moves people between plans. Usage on a since-cancelled
+   subscription still counts, so a need survives an applied change.
+   Phone and cloud-storage services have no usage logs, so anyone who
+   reaches one through any plan, at any depth, needs it. Without this
+   the optimizer would cancel them.
+
+3. The search runs in Node; the database checks the result.
+   optimizer_input() gives the optimizer one JSON document. The search
+   is branch and bound, seeded with today's setup and a greedy answer.
+   Its rules:
+   - every need covered today stays covered
+   - a passive subscription is only replaced by a plan that covers the
+     same service for the same people
+   - no student plans, and no service nobody uses today
+   - no splitting: a service never ends up with more plans than it has
+   - MIN_SAVING = ₹10, measured per dropped subscription by searching
+     again with it kept
+   Ties go to fewer changes, then lower plan ids, so answers repeat.
+   Applying a run checks the state_hash and runs the steps through the
+   normal triggers. It then re-checks needs, passive services and cost,
+   all in one transaction.
+
+4. What-if runs on a copy, never on live tables.
+   A scenario is applied in memory to a copy of optimizer_input(). The
+   repair is optimize() on the changed copy, required to restore every
+   need the change took away, except needs for a service the user
+   cancelled on purpose. A repair may restart a passive plan of the same
+   service, for example a phone plan that left with the member paying
+   for it. Results are stored as kind 'what_if' runs, which can never be
+   applied. A saved scenario stores only the change and is simulated
+   again each time it is opened.
+
+5. Confidence comes from rules and stored evidence.
+   Every finding stores the facts behind it with documented weights:
+   - coverage 3 for a duplicate, 2 for a shared plan or bundle
+   - price 1
+   - usage 1 or 2
+   - silence -3
+   Each evidence type counts once. Any person who has logged nothing for
+   45 days makes their usage-based findings Low. Low findings are kept
+   out of "savings found" and out of a run's counted saving, and are
+   shown under "worth a look". A tier downgrade is Medium at most.
+
+6. Limitation: scaling.
+   The exact search is fast on the demo households (under 60 ms) and on
+   5-member households. From about 10 members and 20 subscriptions it
+   hits its 1.5 s time cap. It then returns the best valid answer found,
+   marked is_optimal = false. In the benchmark that answer still saves at
+   least as much as v1 every time, but the PRD's target of an exact
+   answer under 2 s for 15 members and 30 plans is not met yet.
+   Next steps: a stronger lower bound, splitting the problem by service
+   where plans don't overlap, and memoising repeated sub-problems.

@@ -12,10 +12,12 @@ if they ask "show me".
 It tracks a household's subscriptions and uses SQL to find money being
 wasted: paying twice for something, people on separate plans when a family
 plan is cheaper, bundles that would be cheaper, and subscriptions nobody uses
-anymore. It can also apply the fix for you.
+anymore. v2 then works out the cheapest set of subscriptions that still gives
+everyone what they use, lets you simulate a change before making it, and rates
+how sure it is about each finding. It can apply the fix for you.
 
 **Q: Apps like this already exist. What's new?**
-Three things existing trackers don't do:
+Five things existing trackers don't do:
 1. **Entitlement graph.** We model "plan X includes plan Y" (Airtel →
    Amazon Prime → Prime Video) and walk it with a recursive query. That catches
    duplicates that are invisible if you only compare service names.
@@ -25,6 +27,12 @@ Three things existing trackers don't do:
 3. **Bank statement import.** Pure SQL finds recurring charges in a raw
    statement and checks them against what you track. That includes catching
    something you "cancelled" that is still being charged.
+4. **One decision for the whole household.** Separate findings can contradict
+   each other (a bundle and a cancel both claim the same saving). The optimizer
+   picks one combination that keeps everyone's needs covered at the lowest cost.
+5. **What-if and confidence.** You can ask "what if Priya moves out?" and see who
+   loses what and the cheapest repair, without changing any data. Every
+   finding also carries evidence and a High / Medium / Low confidence.
 
 **Q: Why households and not individuals?**
 Most waste comes from people *around* you: two flatmates each paying for
@@ -36,14 +44,20 @@ pays for. You can't see that one person at a time.
 ## 2. Schema and normalization
 
 **Q: Walk us through the ER diagram.**
-(report.md §2.) The catalog is `CATEGORIES → SERVICES → PLANS`.
-- `ENTITLEMENTS` is a recursive many-to-many relationship on PLANS: plan
-  includes plan.
+(report.md §2.) The catalog is `CATEGORIES → SERVICES → PLAN_CATALOG`. Prices
+live in `PLAN_PRICE_HISTORY`, one row per price per date range.
+- `PLAN_INCLUSION_HISTORY` is a recursive many-to-many relationship on
+  PLAN_CATALOG: plan includes plan, for a date range. (In v1 it was called
+  ENTITLEMENTS, and a view with that name still shows today's rows.)
 - People are `USERS`, grouped into `HOUSEHOLDS` through `HOUSEHOLD_MEMBERS`.
 - A `SUBSCRIPTION` is one payer buying one plan; `SUBSCRIPTION_MEMBERS` says
   who shares it.
 - `USAGE_LOGS` records who used what, and when.
-- `ALERTS` + `ALERT_SUBSCRIPTIONS` store the findings.
+- `ALERTS` + `ALERT_SUBSCRIPTIONS` store the findings, and `FINDING_EVIDENCE`
+  stores the facts behind each one.
+- `MEMBER_NEEDS` records what each person needs. `OPTIMIZATION_RUNS` and
+  `OPTIMIZATION_STEPS` store what the optimizer and the what-if simulator
+  produce, and `SCENARIOS` stores named what-ifs.
 - The import side is `STATEMENT_IMPORTS → BANK_TRANSACTIONS`, plus
   `MERCHANT_ALIASES` for matching charges to services.
 
@@ -51,12 +65,16 @@ pays for. You can't see that one person at a time.
 One plan can include many plans (Apple One includes three), and one plan can
 be included by many (Amazon Prime is included in several telecom plans). That
 makes it M:N, so it needs a junction table. Both foreign keys point at the same
-table, which is why it's called a recursive (unary) relationship.
+table, which is why it's called a recursive (unary) relationship. In v2 it also
+carries `valid_from` and `valid_to`, so a plan can gain or lose an included
+service over time.
 
-**Q: Why is the price on PLANS and not on SUBSCRIPTIONS?**
+**Q: Why is the price on the plan and not on SUBSCRIPTIONS?**
 Price depends on the plan, not on the subscription. If it lived on
 SUBSCRIPTIONS we'd have `subscription_id → plan_id → price`, a transitive
 dependency, which breaks 3NF, and every Spotify Family row would repeat ₹179.
+In v2 it sits in PLAN_PRICE_HISTORY so a price rise is a new row, not an
+overwrite.
 *Trade-off to admit if pushed:* real life has promo prices; supporting them
 would need a nullable `price_override` on SUBSCRIPTIONS.
 
@@ -108,6 +126,8 @@ later, which is two rows with the same user and plan.
   - no subscribing to an included-only plan
   - auto-adding the payer as a member
   - the payer can't be removed from their own subscription
+  - (v2) an included-only plan must cost 0, and a run's steps must add up to
+    its cost change, checked at COMMIT by a deferred trigger
 
 **Q: Your capacity trigger does `SELECT ... FOR UPDATE`. Why?**
 Without it, two people joining the last free slot at the same instant could
@@ -303,23 +323,187 @@ itself refuses to return another household's rows, even if the app has a bug.
 
 **Q: What would you add next?**
 - Row-level security and login.
-- Price-history tracking with price-hike alerts.
+- Price-hike alerts built on the price history we now store.
+- A stronger search for big households (see section 9, scaling).
 - A scheduled nightly refresh (e.g. `pg_cron`).
 - Pulling usage automatically instead of logging it by hand.
 - Supporting promo prices with a per-subscription price override.
 
 ---
 
-## 9. Two-minute demo order
+## 9. v2: history, needs, optimizer, what-if, confidence
+
+**Q: What is an exclusion constraint and why did you need one?**
+Prices and inclusions are stored as date ranges. A normal UNIQUE can't stop two
+ranges overlapping, because they can start on different dates and still
+overlap. `EXCLUDE USING gist (plan_id WITH =, valid_during WITH &&)` says: no
+two rows with the same plan and overlapping ranges. The database refuses the
+insert, so "what was the price on this date" can never have two answers. It
+needs the `btree_gist` extension so a plain integer and a range can share one
+constraint. (`plan_price_history`, `plan_inclusion_history`)
+
+**Q: You changed the main tables. Didn't that break everything?**
+No. `plans` and `entitlements` are now views over the history tables that show
+the rows valid today, so every v1 query, trigger and route runs unchanged. To
+prove it, `db/tests/snapshot.sql` writes everything v1 computes to CSV, and
+`regress.sh` diffs a fresh database against the v1 copy after every change.
+It stayed identical through every step.
+
+**Q: How do you ask "what did this plan include last year"?**
+`entitlement_closure_at(date)`. It is the same recursive walk, but each step
+keeps the intersection of the date ranges so far, so a path only counts while
+every edge on it is valid. `household_spend_at(household, date)` does the same
+for prices. The dashboard's "spend on date" box uses it.
+
+**Q: What is a "need" and why does it belong to a person?**
+It's a fact that a person uses a service. It sits on the household member, not
+on a subscription, because the optimizer's job is to move people between
+subscriptions. A need has to stay put while that happens. It comes from usage
+in the last 30 days, from passive services reached through any plan, or from
+the owner by hand. (`member_needs`, report.md §11)
+
+**Q: Why are phone plans and cloud storage always "needed"?**
+They have no usage logs, so by usage alone they look dead and the optimizer
+would cancel them. Anyone who can reach a passive-category service through an
+active plan, at any depth, needs it. At any depth because Apple One covers
+iCloud+: once Rahul moves to it, his iCloud+ need must still count as covered.
+
+**Q: What is the optimizer solving, and how?**
+Choose which plans the household holds and who is on each, so every need stays
+covered, no plan goes over capacity and the cost is as low as possible. That is
+weighted set cover with capacity limits. We use branch and bound in Node: branch
+on the uncovered need with the fewest options, start from today's setup as the
+first upper bound, tighten it with a greedy pass, and cut any branch that can't
+beat the best answer. The database loads the input and checks the result.
+(`server/optimizer.js`, report.md §12)
+
+**Q: Why is the search in Node and not in SQL?**
+Search with pruning and backtracking is awkward in SQL and fast in a normal
+language. SQL does what it's good at: `optimizer_input()` builds one JSON
+document, and `apply_optimization()` applies the answer through the normal
+triggers and re-checks it. The search can't corrupt data, because anything it
+suggests still has to pass the database's own rules.
+
+**Q: Is the answer really the cheapest?**
+Yes on our households: all three are solved exactly in under 60 ms, and a unit
+test compares it with an exhaustive search on 40 random households. On big
+households the search stops at 1.5 s and returns the best valid answer with
+`is_optimal = false`.
+
+**Q: What are the rules it follows?**
+- Every need that is covered today stays covered.
+- A passive subscription is only replaced by a plan covering the same service
+  for the same people, never just cancelled.
+- No student plans (no eligibility data) and no service nobody uses today.
+- No splitting: a service never ends up with more plans than it has now.
+- A change must save at least ₹10 a month.
+
+**Q: Why the "no splitting" rule?**
+Without it the search replaces one shared Netflix Premium (₹649, four people)
+with four Netflix Mobile plans (₹596). That is cheaper on paper but a worse
+product, and the optimizer can't see quality. The rule makes the result easy to
+defend.
+
+**Q: Why the ₹10 minimum?**
+Sharma's YouTube Premium Family costs ₹299 and two Individual plans cost ₹298.
+The search would make three changes to save ₹1. `MIN_SAVING` skips changes that
+small. It is measured per dropped subscription by searching again with it kept.
+
+**Q: What does the optimizer find that v1 didn't?**
+For Sharma it saves ₹660.84 against v1's ₹610.84. The extra ₹50 is Dev's
+JioHotstar Super going to Mobile, because nobody else on it used it in 30 days.
+Hostel (₹285) and Iyer (₹1,788) match v1 exactly. It also decides conflicts:
+each v1 finding is labelled adopted, superseded or rejected.
+
+**Q: What if the household changes between "Run" and "Apply"?**
+Each run stores a `state_hash`, an md5 of the optimizer input. Apply takes the
+household lock and compares it. If it differs, the run is marked stale and
+refused (HTTP 409), and the page offers Run again. This is optimistic
+concurrency: nobody holds a lock while thinking, but a stale answer can never
+be applied.
+
+**Q: What stops a bad run from being applied?**
+`apply_optimization()` runs the steps through the normal triggers, then checks
+that every need that was covered still is, that no passive service was
+cancelled, and that the cost equals the promised `cost_after`. If any check
+fails it raises, and the whole transaction rolls back. A test injects a failure
+in the last step and confirms nothing changed.
+
+**Q: How does what-if avoid changing data?**
+It never touches the tables. `server/whatif.js` applies the change to an
+in-memory copy of `optimizer_input()` and re-runs the optimizer on that copy to
+find the cheapest repair. A test runs 123 scenarios and compares row counts and
+hashes of all 18 live tables before and after: nothing changes. What-if runs are
+stored with `kind = 'what_if'`, and `apply_optimization()` refuses them.
+
+**Q: Example of a what-if?**
+Priya moves out of the Sharma household. Cost drops from ₹3,036.51 to
+₹2,038.59, but Arjun, Meera and Dev lose Netflix and Dev loses YouTube Premium.
+The repair gives all four back for a new cost of ₹2,225.67.
+
+**Q: How is confidence decided?**
+Every finding stores evidence rows with weights: coverage 3 for a duplicate
+(2 for a shared plan or bundle), price 1, usage 1 or 2, silence -3. Each type
+counts once at its strongest row. Three or more is High, two is Medium, less is
+Low. (`finding_evidence`, `v_finding_confidence`)
+
+**Q: Why does 45 days of silence make a finding Low?**
+"Unused for 60 days" means nothing if the person never logs anything. If a
+member has logged no usage at all for 45 days, usage-based findings about them
+are rated Low, kept out of "savings found" and shown muted under "worth a
+look". Coverage findings stay High, because a duplicate is true whether or not
+someone logs usage.
+
+**Q: Where does the system fall short?** (say this before they ask)
+- **Scaling.** From about 10 members and 20 subscriptions the exact search hits
+  its 1.5 s cap. It then returns the best valid answer, flagged as not proven
+  cheapest. The PRD's goal of exact answers for 15 members and 30 plans isn't
+  met. The problem is NP-hard in general. Next steps: a stronger lower bound,
+  splitting by service where plans don't overlap, and caching sub-problems.
+- It can't see plan quality (Mobile vs Premium), so downgrades are labelled and
+  never rated above Medium.
+- Needs come from the last 30 days of usage, so seasonal use can be missed. The
+  owner can add a need by hand.
+- The confidence weights are our own judgement, not calibrated on real data.
+
+**Q: What did the benchmark show?**
+`node db/tests/benchmark.js` builds synthetic households of a chosen size inside
+a rolled-back transaction and times v1 against the optimizer. v2 saved at least
+as much as v1 every time. Households with 5 members are solved exactly in well
+under 2 s.
+
+**Q: How did you test it?**
+Six layers, all on scratch databases:
+1. A diff of v1's output against a saved baseline, after every change.
+2. SQL checks for history, coverage, needs and reason paths (34).
+3. Optimizer checks per household (28): never worse than v1, no need lost,
+   nothing passive lost, no splitting, repeatable, a failure leaves nothing
+   changed.
+4. What-if checks (22): 123 scenarios, live tables unchanged, every repair
+   re-covers every need.
+5. Confidence checks (26).
+6. 20 unit tests, including a comparison with an exhaustive search.
+
+---
+
+## 10. Three-minute demo order
+
+Re-run the three SQL files first so the demo database is fresh.
 
 1. **Sharma Household → Hidden entitlements panel.** Show the 2-level chain:
    Airtel → Amazon Prime → Prime Video, which Priya also pays for.
-2. **Spotify family-plan finding → Preview fix.** Read the 4 steps and the
-   ₹3,037 → ₹2,919 drop, then point out the database didn't change.
-   Click **Apply**.
-3. **Import Priya's sample statement.** It finds a forgotten second Netflix.
-   Click **Add**, and a new finding appears straight away.
-4. **Iyer Residence → Vikram's sample statement.** Prime is "cancelled" but
-   still being charged.
-5. **Try to break it.** Add a third person to a 2-person plan; the database's
+2. **Spotify family-plan finding → Preview fix.** Read the steps and the
+   ₹3,037 → ₹2,919 drop, then point out the database didn't change. Don't
+   apply.
+3. **What-if.** Choose "remove a member", Priya. Show who loses what and the
+   repair (₹2,038.59 before the repair, ₹2,225.67 after). Save it as a named
+   scenario.
+4. **Optimize my household → Run.** Read the first few steps and the total:
+   ₹3,036.51 → ₹2,375.67, ₹50 more than v1's findings alone. Click **Preview**
+   (nothing changes), then **Apply**.
+5. **Needs panel.** Point at a passive need (the Airtel plan) and say why it
+   can't be cancelled.
+6. **Import Priya's sample statement.** It finds a forgotten second Netflix.
+7. **Try to break it.** Add a third person to a 2-person plan; the database's
    own error appears in the UI.
+8. *(Terminal, if asked about scaling)* `node db/tests/benchmark.js`.
