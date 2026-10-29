@@ -84,10 +84,25 @@
   header .tag { font-size: 13px; color: var(--ink-2); margin-top: 3px; }
   header .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
-  main {
-    max-width: 1280px; margin: 0 auto; padding: 18px 28px 60px;
-    display: grid; grid-template-columns: minmax(0, 1fr) 390px; gap: 20px;
+  main { max-width: 1280px; margin: 0 auto; padding: 18px 28px 60px; }
+  .cols { display: grid; grid-template-columns: minmax(0, 1fr) 390px; gap: 20px; align-items: start; }
+  .view { display: none; }
+  .view.on { display: block; }
+
+  /* top nav */
+  .nav {
+    position: sticky; top: 0; z-index: 5; display: flex; gap: 4px;
+    max-width: 1280px; margin: 14px auto 0; padding: 8px 28px;
+    background: color-mix(in srgb, var(--page) 88%, transparent); backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--border);
   }
+  .nav a {
+    flex: none; padding: 7px 14px; border-radius: 999px; font-size: 13px; font-weight: 500;
+    color: var(--ink-2); text-decoration: none; border: 1px solid transparent; white-space: nowrap;
+  }
+  .nav a:hover { color: var(--ink); background: var(--surface-2); }
+  .nav a.on { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  .nav a:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent); outline-offset: 1px; }
   .stack { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
   .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 20px 22px; box-shadow: var(--shadow); }
   .card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
@@ -327,11 +342,13 @@
   .toast.err { background: var(--bad-text); color: #fff; }
 
   @media (max-width: 1080px) {
-    main { grid-template-columns: minmax(0, 1fr); }
+    .cols { grid-template-columns: minmax(0, 1fr); }
     .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   }
   @media (max-width: 640px) {
-    header, main { padding-left: 16px; padding-right: 16px; }
+    header, main, .nav { padding-left: 16px; padding-right: 16px; }
+    .nav { overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+    .nav::-webkit-scrollbar { display: none; }
     header h1 { font-size: 22px; }
     .card { padding: 16px; border-radius: 16px; }
     .tiles { grid-template-columns: minmax(0, 1fr); }
@@ -355,7 +372,7 @@
   <div class="brand">
     <span class="mark" aria-hidden="true">S</span>
     <div>
-      <div class="eyebrow">Household / Overview</div>
+      <div class="eyebrow">Household / <span id="crumb">Overview</span></div>
       <h1>SubWatch</h1>
       <div class="tag">The cheapest way to keep everything your household uses.</div>
     </div>
@@ -366,11 +383,103 @@
   </div>
 </header>
 
-<main>
-  <div class="stack">
-    <div class="tiles" id="tiles"></div>
+<nav class="nav" id="nav" role="tablist" aria-label="Sections">
+  <a href="#overview" data-tab="overview" role="tab">Overview</a>
+  <a href="#subscriptions" data-tab="subscriptions" role="tab">Subscriptions</a>
+  <a href="#optimizer" data-tab="optimizer" role="tab">Optimizer</a>
+  <a href="#whatif" data-tab="whatif" role="tab">What-if</a>
+  <a href="#household" data-tab="household" role="tab">Household</a>
+</nav>
 
-    <section class="card" id="optCard">
+<main>
+  <div class="view" id="view-overview" data-view="overview" role="tabpanel" aria-label="Overview">
+    <div class="stack">
+    <div class="tiles" id="tiles"></div>
+    <div class="cols">
+      <div class="stack">
+        <section class="card">
+      <h2>Optimizer findings</h2>
+      <p class="sub">Each finding shows the path that explains it, how sure the database is, and the facts behind it.</p>
+      <div class="tabs" id="tabs"></div>
+      <div id="findings"></div>
+    </section>
+      </div>
+      <div class="stack">
+        <section class="card">
+      <h2>Spend by category</h2>
+      <p class="sub">Per month, active subscriptions.</p>
+      <div id="categories"></div>
+    </section>
+      </div>
+    </div>
+    </div>
+  </div>
+  <div class="view" id="view-subscriptions" data-view="subscriptions" role="tabpanel" aria-label="Subscriptions">
+    <div class="stack">
+        <section class="card">
+      <h2>Subscriptions</h2>
+      <p class="sub">Click a row to manage members, log usage or cancel. Bars show sessions per 30 days over the last 6 months.</p>
+      <div class="scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Service</th>
+            <th class="hide-sm">Paid by</th>
+            <th>Members</th>
+            <th class="hide-sm">Usage</th>
+            <th class="num" style="text-align:right">Per month</th>
+          </tr>
+        </thead>
+        <tbody id="subsBody"></tbody>
+      </table>
+      </div>
+    </section>
+    <div class="cols">
+      <div class="stack">
+        <section class="card">
+      <h2>Import a bank statement</h2>
+      <p class="sub">A CSV with date, description and amount columns. SubWatch looks for charges that repeat on a steady cycle and checks them against what this household already tracks.</p>
+      <div class="import-row">
+        <select id="impUser" aria-label="Whose statement"></select>
+        <input type="file" id="impFile" accept=".csv,text/csv" aria-label="Statement CSV" />
+        <span class="hint">or</span>
+        <button id="impSample">Try a sample statement</button>
+        <a id="impSampleLink" href="#" download>download sample</a>
+      </div>
+      <div id="impResults"></div>
+    </section>
+      </div>
+      <div class="stack">
+        <section class="card">
+      <h2>Add a subscription</h2>
+      <form class="add" id="addForm">
+        <div>
+          <label for="fPlan">Plan</label>
+          <select id="fPlan" required></select>
+          <div class="hint" id="fPlanHint"></div>
+        </div>
+        <div>
+          <label for="fPayer">Paid by</label>
+          <select id="fPayer" required></select>
+        </div>
+        <div>
+          <label>Shared with</label>
+          <div class="checks" id="fMembers"></div>
+        </div>
+        <div>
+          <label for="fStart">Start date</label>
+          <input type="date" id="fStart" required />
+        </div>
+        <button class="primary" type="submit">Add subscription</button>
+      </form>
+    </section>
+      </div>
+    </div>
+    </div>
+  </div>
+  <div class="view" id="view-optimizer" data-view="optimizer" role="tabpanel" aria-label="Optimizer">
+    <div class="stack">
+        <section class="card" id="optCard">
       <div class="card-head">
         <div>
           <h2>Optimize my household</h2>
@@ -380,15 +489,11 @@
       </div>
       <div id="optimizer"></div>
     </section>
-
-    <section class="card">
-      <h2>Optimizer findings</h2>
-      <p class="sub">Each finding shows the path that explains it, how sure the database is, and the facts behind it.</p>
-      <div class="tabs" id="tabs"></div>
-      <div id="findings"></div>
-    </section>
-
-    <section class="card" id="wiCard">
+    </div>
+  </div>
+  <div class="view" id="view-whatif" data-view="whatif" role="tabpanel" aria-label="What-if">
+    <div class="stack">
+        <section class="card" id="wiCard">
       <h2>What if…</h2>
       <p class="sub">Simulate a change without touching anything: see who loses what, the cost, and the cheapest repair.</p>
       <div class="wi-form">
@@ -414,100 +519,40 @@
       <div id="wiSaved"></div>
       <div id="wiCompare"></div>
     </section>
-
-    <section class="card">
-      <h2>Subscriptions</h2>
-      <p class="sub">Click a row to manage members, log usage or cancel. Bars show sessions per 30 days over the last 6 months.</p>
-      <div class="scroll">
-      <table>
-        <thead>
-          <tr>
-            <th>Service</th>
-            <th class="hide-sm">Paid by</th>
-            <th>Members</th>
-            <th class="hide-sm">Usage</th>
-            <th class="num" style="text-align:right">Per month</th>
-          </tr>
-        </thead>
-        <tbody id="subsBody"></tbody>
-      </table>
-      </div>
-    </section>
-
-    <section class="card">
-      <h2>Import a bank statement</h2>
-      <p class="sub">A CSV with date, description and amount columns. SubWatch looks for charges that repeat on a steady cycle and checks them against what this household already tracks.</p>
-      <div class="import-row">
-        <select id="impUser" aria-label="Whose statement"></select>
-        <input type="file" id="impFile" accept=".csv,text/csv" aria-label="Statement CSV" />
-        <span class="hint">or</span>
-        <button id="impSample">Try a sample statement</button>
-        <a id="impSampleLink" href="#" download>download sample</a>
-      </div>
-      <div id="impResults"></div>
-    </section>
-
-    <section class="card">
-      <h2>Hidden entitlements</h2>
-      <p class="sub">Services your household already gets through another plan, found by walking the "includes" graph.</p>
-      <div id="entitlements"></div>
-    </section>
+    </div>
   </div>
-
-  <div class="stack">
-    <section class="card">
+  <div class="view" id="view-household" data-view="household" role="tabpanel" aria-label="Household">
+    <div class="cols">
+      <div class="stack">
+        <section class="card">
       <h2>What each person needs</h2>
       <p class="sub">From the last 30 days of usage, plus phone and storage plans (nobody logs those). The optimizer never drops a need.</p>
       <div id="needs"></div>
     </section>
-
-    <section class="card">
+        <section class="card">
+      <h2>Hidden entitlements</h2>
+      <p class="sub">Services your household already gets through another plan, found by walking the "includes" graph.</p>
+      <div id="entitlements"></div>
+    </section>
+      </div>
+      <div class="stack">
+        <section class="card">
       <h2>Who pays what</h2>
       <p class="sub">Fair cost = sole subs in full, plus a share of shared plans (half split equally, half by minutes used).</p>
       <div id="members"></div>
     </section>
-
-    <section class="card">
+        <section class="card">
       <h2>Settle up</h2>
       <p class="sub">Monthly transfers, with opposite debts netted out.</p>
       <div id="settle"></div>
     </section>
-
-    <section class="card">
+        <section class="card">
       <h2>Next 30 days</h2>
       <p class="sub">Upcoming renewals, at the price on each date.</p>
       <div id="forecast"></div>
     </section>
-
-    <section class="card">
-      <h2>Spend by category</h2>
-      <p class="sub">Per month, active subscriptions.</p>
-      <div id="categories"></div>
-    </section>
-
-    <section class="card">
-      <h2>Add a subscription</h2>
-      <form class="add" id="addForm">
-        <div>
-          <label for="fPlan">Plan</label>
-          <select id="fPlan" required></select>
-          <div class="hint" id="fPlanHint"></div>
-        </div>
-        <div>
-          <label for="fPayer">Paid by</label>
-          <select id="fPayer" required></select>
-        </div>
-        <div>
-          <label>Shared with</label>
-          <div class="checks" id="fMembers"></div>
-        </div>
-        <div>
-          <label for="fStart">Start date</label>
-          <input type="date" id="fStart" required />
-        </div>
-        <button class="primary" type="submit">Add subscription</button>
-      </form>
-    </section>
+      </div>
+    </div>
   </div>
 </main>
 
@@ -1539,6 +1584,36 @@ $('runBtn').onclick = async () => {
   await act(() => api(`/households/${state.hid}/alerts/refresh`, { method: 'POST' }), 'Findings refreshed');
   $('runBtn').disabled = false;
 };
+
+// ---------- tabs ----------
+// Tabs only show and hide panels; data is loaded by loadAll() on household
+// change and after actions, never on a tab switch.
+const VIEWS = ['overview', 'subscriptions', 'optimizer', 'whatif', 'household'];
+function showTab() {
+  const hash = location.hash.slice(1);
+  const tab = VIEWS.includes(hash) ? hash : 'overview';
+  document.querySelectorAll('.view').forEach(v => v.classList.toggle('on', v.dataset.view === tab));
+  document.querySelectorAll('#nav a').forEach(a => {
+    const on = a.dataset.tab === tab;
+    a.classList.toggle('on', on);
+    a.setAttribute('aria-selected', on);
+    if (on) a.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  });
+  $('crumb').textContent = document.querySelector(`#nav a[data-tab="${tab}"]`).textContent;
+}
+$('nav').onclick = (e) => {
+  const a = e.target.closest('a[data-tab]');
+  if (!a) return;
+  // pushState rather than following the link: #optimizer is also an element id
+  // and the browser would jump to it.
+  e.preventDefault();
+  history.pushState(null, '', '#' + a.dataset.tab);
+  showTab();
+  window.scrollTo(0, 0);
+};
+window.addEventListener('popstate', showTab);
+window.addEventListener('hashchange', showTab);
+showTab();
 
 init().catch(e => toast('Could not reach the server: ' + e.message, true));
 </script>
