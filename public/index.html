@@ -1477,7 +1477,7 @@ function importItem(r, i) {
   } else if (r.status === 'no_matching_plan') {
     status = `<span class="meh">Looks like ${esc(r.service_names)}, but no plan costs ${inr(r.amount)} ${every}</span>`;
   } else {
-    status = `<span class="meh">Recurring, but not a subscription SubWatch knows</span>`;
+    status = `<span class="meh">Recurring charge, not in SubWatch's catalog</span>`;
   }
   return `
     <div class="imp-item">
